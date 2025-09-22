@@ -23,24 +23,42 @@ function isAuthorized(req: NextRequest): boolean {
   const hdrToken = req.headers.get("x-cron-secret");
   const vercelCron = req.headers.get("x-vercel-cron");
   const envToken = process.env.CRON_SECRET;
-
-  if (vercelCron) return true; // invoked by Vercel cron
+  if (vercelCron) return true;
   if (envToken && (qpToken === envToken || hdrToken === envToken)) return true;
   return false;
 }
 
-async function drainRecent(max: number): Promise<RecentRec[]> {
-  const out: RecentRec[] = [];
-  for (let i = 0; i < max; i++) {
-    const raw = await kv.lpop<string>("b2ai:recent");
-    if (!raw) break;
+function safeParseRec(val: unknown): RecentRec | null {
+  if (typeof val === "string") {
     try {
-      out.push(JSON.parse(raw) as RecentRec);
+      return JSON.parse(val) as RecentRec;
     } catch {
-      // skip malformed
+      return null;
     }
   }
-  return out;
+  // If it's already an object, try to coerce minimally
+  if (val && typeof val === "object") {
+    const anyVal = val as any;
+    if (anyVal.ts && anyVal.q && anyVal.top && typeof anyVal.answer_len !== "undefined") {
+      return anyVal as RecentRec;
+    }
+    return null;
+  }
+  return null;
+}
+
+async function drainRecent(max: number): Promise<{ recs: RecentRec[]; seen: number }> {
+  const out: RecentRec[] = [];
+  let seen = 0;
+  for (let i = 0; i < max; i++) {
+    const raw = (await kv.lpop("b2ai:recent")) as unknown;
+    if (!raw) break;
+    seen++;
+    const rec = safeParseRec(raw);
+    if (rec) out.push(rec);
+    // if unparsable, we just drop it (or could push to a dead-letter later)
+  }
+  return { recs: out, seen };
 }
 
 async function putBack(recs: RecentRec[]) {
@@ -51,41 +69,57 @@ async function putBack(recs: RecentRec[]) {
 }
 
 export async function GET(req: NextRequest) {
-  // Quick “route exists” stamp for debugging
-  const debug = req.nextUrl.searchParams.get("debug");
-
-  if (!isAuthorized(req)) {
-    return NextResponse.json({ ok: false, route: "mirror", error: "unauthorized" }, { status: 401 });
-  }
-
-  if (!hasKV) {
-    return NextResponse.json({ ok: false, route: "mirror", error: "no_kv" }, { status: 200 });
-  }
-
-  if (debug === "ping") {
-    const llen = await kv.llen("b2ai:recent");
-    return NextResponse.json({ ok: true, route: "mirror", mode: "ping", llen, batch: BATCH, dry: DRY });
-  }
-
-  const drained = await drainRecent(BATCH);
-
-  if (DRY) {
-    await putBack(drained);
-    return NextResponse.json({ ok: true, route: "mirror", mode: "dry", drained: drained.length });
-  }
-
-  if (drained.length === 0) {
-    return NextResponse.json({ ok: true, route: "mirror", drained: 0 });
-  }
-
   try {
+    if (!isAuthorized(req)) {
+      return NextResponse.json({ ok: false, route: "mirror", error: "unauthorized" }, { status: 401 });
+    }
+    if (!hasKV) {
+      return NextResponse.json({ ok: false, route: "mirror", error: "no_kv" }, { status: 200 });
+    }
+
+    const before = await kv.llen("b2ai:recent");
+
+    const url = new URL(req.url);
+    const debug = url.searchParams.get("debug");
+    if (debug === "ping") {
+      return NextResponse.json({ ok: true, route: "mirror", mode: "ping", llen: before, batch: BATCH, dry: DRY });
+    }
+
+    const { recs, seen } = await drainRecent(BATCH);
+
+    if (DRY) {
+      await putBack(recs);
+      const afterDry = await kv.llen("b2ai:recent");
+      return NextResponse.json({
+        ok: true,
+        route: "mirror",
+        mode: "dry",
+        seen,
+        drained: recs.length,
+        before,
+        after: afterDry,
+      });
+    }
+
+    if (recs.length === 0) {
+      const afterNone = await kv.llen("b2ai:recent");
+      return NextResponse.json({
+        ok: true,
+        route: "mirror",
+        drained: 0,
+        seen,
+        before,
+        after: afterNone,
+      });
+    }
+
     const supabase = getSupabaseAdmin();
 
     // insert log rows
     const { error: logErr } = await supabase
       .from("b2ai_query_log")
       .insert(
-        drained.map((r) => ({
+        recs.map((r) => ({
           ts: r.ts,
           q: r.q,
           answer_len: r.answer_len,
@@ -94,15 +128,19 @@ export async function GET(req: NextRequest) {
       );
 
     if (logErr) {
-      await putBack(drained);
-      return NextResponse.json({ ok: false, route: "mirror", error: `log_insert: ${logErr.message}` }, { status: 500 });
+      await putBack(recs);
+      const afterErr = await kv.llen("b2ai:recent");
+      return NextResponse.json(
+        { ok: false, route: "mirror", error: `log_insert: ${logErr.message}`, before, after: afterErr, seen, drained: 0 },
+        { status: 500 }
+      );
     }
 
     // aggregate counters
     const qCounts = new Map<string, number>();
     const pageCounts = new Map<string, number>();
     const chunkCounts = new Map<string, number>();
-    for (const r of drained) {
+    for (const r of recs) {
       qCounts.set(r.q, (qCounts.get(r.q) || 0) + 1);
       for (const t of r.top) {
         pageCounts.set(t.page, (pageCounts.get(t.page) || 0) + 1);
@@ -118,15 +156,19 @@ export async function GET(req: NextRequest) {
       for (const [k, by] of m.entries()) await incr(`${prefix}:${k}`, by);
     };
 
-    await incr("totals:queries", drained.length);
+    await incr("totals:queries", recs.length);
     await doMap(qCounts, "q");
     await doMap(pageCounts, "page");
     await doMap(chunkCounts, "chunk");
 
+    const after = await kv.llen("b2ai:recent");
     return NextResponse.json({
       ok: true,
       route: "mirror",
-      drained: drained.length,
+      drained: recs.length,
+      seen,
+      before,
+      after,
       wrote_logs: true,
       wrote_counters: true,
     });
