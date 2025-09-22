@@ -10,12 +10,34 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 const BATCH = Number(process.env.MIRROR_BATCH_SIZE || 200);
 const DRY = process.env.MIRROR_DRY_RUN === "1";
 
+type TopItem = { id: string; page: string };
 type RecentRec = {
   ts: string;
   q: string;
-  top: { id: string; page: string }[];
+  top: TopItem[];
   answer_len: number;
 };
+
+function isTopItem(x: unknown): x is TopItem {
+  return (
+    typeof x === "object" &&
+    x !== null &&
+    typeof (x as Record<string, unknown>).id === "string" &&
+    typeof (x as Record<string, unknown>).page === "string"
+  );
+}
+
+function isRecentRec(x: unknown): x is RecentRec {
+  if (typeof x !== "object" || x === null) return false;
+  const obj = x as Record<string, unknown>;
+  return (
+    typeof obj.ts === "string" &&
+    typeof obj.q === "string" &&
+    Array.isArray(obj.top) &&
+    (obj.top as unknown[]).every(isTopItem) &&
+    typeof obj.answer_len === "number"
+  );
+}
 
 function isAuthorized(req: NextRequest): boolean {
   const url = new URL(req.url);
@@ -28,23 +50,16 @@ function isAuthorized(req: NextRequest): boolean {
   return false;
 }
 
-function safeParseRec(val: unknown): RecentRec | null {
+function parseRecentRec(val: unknown): RecentRec | null {
   if (typeof val === "string") {
     try {
-      return JSON.parse(val) as RecentRec;
+      const parsed = JSON.parse(val) as unknown;
+      return isRecentRec(parsed) ? parsed : null;
     } catch {
       return null;
     }
   }
-  // If it's already an object, try to coerce minimally
-  if (val && typeof val === "object") {
-    const anyVal = val as any;
-    if (anyVal.ts && anyVal.q && anyVal.top && typeof anyVal.answer_len !== "undefined") {
-      return anyVal as RecentRec;
-    }
-    return null;
-  }
-  return null;
+  return isRecentRec(val) ? (val as RecentRec) : null;
 }
 
 async function drainRecent(max: number): Promise<{ recs: RecentRec[]; seen: number }> {
@@ -54,9 +69,9 @@ async function drainRecent(max: number): Promise<{ recs: RecentRec[]; seen: numb
     const raw = (await kv.lpop("b2ai:recent")) as unknown;
     if (!raw) break;
     seen++;
-    const rec = safeParseRec(raw);
+    const rec = parseRecentRec(raw);
     if (rec) out.push(rec);
-    // if unparsable, we just drop it (or could push to a dead-letter later)
+    // if unparsable, drop; could push to DLQ in future
   }
   return { recs: out, seen };
 }
@@ -78,7 +93,6 @@ export async function GET(req: NextRequest) {
     }
 
     const before = await kv.llen("b2ai:recent");
-
     const url = new URL(req.url);
     const debug = url.searchParams.get("debug");
     if (debug === "ping") {
