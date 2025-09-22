@@ -16,17 +16,25 @@ type Insights = {
 function getBaseUrl(): string {
   // Prefer explicit env if provided (set this in Vercel for Production)
   if (process.env.NEXT_PUBLIC_BASE_URL) return process.env.NEXT_PUBLIC_BASE_URL;
-
   // Vercel sets VERCEL_URL like "book2ai-demo.vercel.app"
   if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
-
   // Local dev fallback
   return "http://localhost:3000";
 }
 
 async function getInsights(): Promise<Insights> {
   const base = getBaseUrl();
-  const res = await fetch(`${base}/api/insights`, { cache: "no-store" });
+
+  const hdrs: Record<string, string> = {};
+  // Allow server-to-server fetch to bypass Vercel password/protection
+  if (process.env.VERCEL_PROTECTION_BYPASS) {
+    hdrs["x-vercel-protection-bypass"] = process.env.VERCEL_PROTECTION_BYPASS;
+  }
+
+  const res = await fetch(`${base}/api/insights`, {
+    cache: "no-store",
+    headers: hdrs,
+  });
   if (!res.ok) {
     throw new Error(`Insights fetch failed: ${res.status}`);
   }
@@ -74,8 +82,8 @@ export default async function CreatorPage() {
             <tbody>
               {data.series.map((p) => (
                 <tr key={p.day} className="border-b last:border-0">
-                  <td className="py-2 pr-4">{p.day}</td>
-                  <td className="py-2">{p.count}</td>
+                    <td className="py-2 pr-4">{p.day}</td>
+                    <td className="py-2">{p.count}</td>
                 </tr>
               ))}
             </tbody>
