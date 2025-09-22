@@ -2,6 +2,7 @@
 export const dynamic = "force-dynamic";
 
 import Link from "next/link";
+import { headers } from "next/headers";
 
 type StatItem = { key: string; count: number };
 type DayPoint = { day: string; count: number };
@@ -13,13 +14,21 @@ type Insights = {
   topChunks: StatItem[];
 };
 
+function getBaseUrl(): string {
+  // Prefer explicit env if provided
+  if (process.env.NEXT_PUBLIC_BASE_URL) return process.env.NEXT_PUBLIC_BASE_URL;
+
+  // Derive from incoming request headers (Vercel / proxies)
+  const h = headers();
+  const proto = h.get("x-forwarded-proto") || "https";
+  const host = h.get("host") || "localhost:3000";
+  return `${proto}://${host}`;
+}
+
 async function getInsights(): Promise<Insights> {
-  const res = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL ?? ""}/api/insights`, {
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    throw new Error(`Insights fetch failed: ${res.status}`);
-  }
+  const base = getBaseUrl();
+  const res = await fetch(`${base}/api/insights`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Insights fetch failed: ${res.status}`);
   return res.json();
 }
 
@@ -49,10 +58,7 @@ export default async function CreatorPage() {
       <section className="rounded-2xl border p-4">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-lg font-semibold">7-day trend</h2>
-          <a
-            href="/api/export?days=7"
-            className="text-sm underline"
-          >
+          <a href="/api/export?days=7" className="text-sm underline">
             Download CSV (7d)
           </a>
         </div>
