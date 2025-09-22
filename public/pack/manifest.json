@@ -1,0 +1,19 @@
+{
+  "id": "book2ai.scientific_advertising.1923.hopkins.v1",
+  "title": "Scientific Advertising",
+  "author": "Claude C. Hopkins",
+  "edition_year": 1923,
+  "source": "Public Domain (United States)",
+  "embeddings_model": "text-embedding-3-small",
+  "chunking": { "max_chars": 1000, "overlap": 120 },
+  "files": {
+    "source_text": "source_normalized.txt",
+    "chunks": "chunks.jsonl",
+    "embeddings": "embeddings.npy",
+    "meta": "meta.json",
+    "policy": "policy.txt",
+    "qa": "qa.jsonl"
+  },
+  "license_scope": "RAG-Interactive",
+  "tags": ["marketing","copywriting","advertising","appeals","headlines","testing"]
+}
