@@ -1,0 +1,111 @@
+// app/source/page.tsx
+export const runtime = "nodejs";
+
+import { headers } from "next/headers";
+
+type Page = { n: number; text: string };
+
+function splitPages(raw: string): Page[] {
+  const lines = raw.split(/\r?\n/);
+  const pages: Page[] = [];
+  let current = { n: 0, buf: [] as string[] };
+
+  for (const line of lines) {
+    const m = line.match(/^\s*\[\[PAGE:(\d+)\]\]\s*$/);
+    if (m) {
+      if (current.n > 0 && current.buf.length) {
+        pages.push({ n: current.n, text: current.buf.join("\n").trim() });
+      }
+      current = { n: parseInt(m[1], 10), buf: [] };
+    } else {
+      current.buf.push(line);
+    }
+  }
+  if (current.n > 0 && current.buf.length) {
+    pages.push({ n: current.n, text: current.buf.join("\n").trim() });
+  }
+  return pages;
+}
+
+async function getBaseUrl(): Promise<string> {
+  if (process.env.NEXT_PUBLIC_BASE_URL && process.env.NEXT_PUBLIC_BASE_URL.trim()) {
+    return process.env.NEXT_PUBLIC_BASE_URL.trim();
+  }
+  const h = await headers();
+  const proto = h.get("x-forwarded-proto") ?? "http";
+  const host = h.get("host") ?? "localhost:3000";
+  return `${proto}://${host}`;
+}
+
+async function loadSourceText(): Promise<string> {
+  const base = await getBaseUrl();
+  const res = await fetch(`${base}/pack/source_normalized.txt`, { cache: "force-cache" });
+  if (!res.ok) throw new Error(`Failed to fetch source text: ${res.status}`);
+  return res.text();
+}
+
+export default async function SourcePage({
+  searchParams,
+}: {
+  searchParams?: { p?: string };
+}) {
+  const raw = await loadSourceText();
+  const pages = splitPages(raw);
+
+  const targetParam = (searchParams?.p ?? "").trim();
+  const targetPage = Number(targetParam);
+  const validTarget = Number.isFinite(targetPage) && targetPage > 0;
+  const hash = validTarget ? `#p-${targetPage}` : "";
+
+  return (
+    <main className="p-4 max-w-5xl mx-auto">
+      <h1 className="text-xl font-semibold mb-3">Scientific Advertising — Source</h1>
+      <p className="text-sm mb-4">Jump to a page by number (uses [[PAGE:n]] markers).</p>
+
+      <form action="/source" method="get" className="flex items-center gap-2 mb-4">
+        <label htmlFor="p" className="text-sm">
+          Page:
+        </label>
+        <input
+          id="p"
+          name="p"
+          defaultValue={validTarget ? String(targetPage) : ""}
+          placeholder="e.g. 16"
+          className="border rounded px-2 py-1 w-24"
+        />
+        <button type="submit" className="border rounded px-3 py-1">
+          Go
+        </button>
+        {validTarget ? (
+          <a href={`#p-${targetPage}`} className="underline text-sm ml-2">
+            Jump to #{targetPage}
+          </a>
+        ) : null}
+      </form>
+
+      {validTarget ? (
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              (function(){
+                var h = "${hash}";
+                if (h && location.hash !== h) {
+                  location.hash = h;
+                }
+              })();
+            `,
+          }}
+        />
+      ) : null}
+
+      <div className="space-y-4">
+        {pages.map((pg) => (
+          <section key={pg.n} id={`p-${pg.n}`} className="border rounded p-3">
+            <div className="text-xs text-gray-600 mb-1">Page {pg.n}</div>
+            <pre className="whitespace-pre-wrap text-sm">{pg.text}</pre>
+          </section>
+        ))}
+      </div>
+    </main>
+  );
+}
