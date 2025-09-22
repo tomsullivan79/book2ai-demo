@@ -2,7 +2,6 @@
 export const dynamic = "force-dynamic";
 
 import Link from "next/link";
-import { headers } from "next/headers";
 
 type StatItem = { key: string; count: number };
 type DayPoint = { day: string; count: number };
@@ -15,20 +14,22 @@ type Insights = {
 };
 
 function getBaseUrl(): string {
-  // Prefer explicit env if provided
+  // Prefer explicit env if provided (set this in Vercel for Production)
   if (process.env.NEXT_PUBLIC_BASE_URL) return process.env.NEXT_PUBLIC_BASE_URL;
 
-  // Derive from incoming request headers (Vercel / proxies)
-  const h = headers();
-  const proto = h.get("x-forwarded-proto") || "https";
-  const host = h.get("host") || "localhost:3000";
-  return `${proto}://${host}`;
+  // Vercel sets VERCEL_URL like "book2ai-demo.vercel.app"
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
+
+  // Local dev fallback
+  return "http://localhost:3000";
 }
 
 async function getInsights(): Promise<Insights> {
   const base = getBaseUrl();
   const res = await fetch(`${base}/api/insights`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`Insights fetch failed: ${res.status}`);
+  if (!res.ok) {
+    throw new Error(`Insights fetch failed: ${res.status}`);
+  }
   return res.json();
 }
 
