@@ -1,79 +1,268 @@
-// app/admin/page.tsx
-export const dynamic = "force-dynamic"; // ensure fresh analytics on each request
+'use client';
 
-import { headers } from "next/headers";
+import React, { useEffect, useMemo, useState } from 'react';
+import IntegrityBadge from '../components/IntegrityBadge';
 
-type StatItem = { key: string; count: number };
-type AnalyticsResponse = {
-  totals: { queries: number };
-  topQueries: StatItem[];
-  topPages: StatItem[];
-  topChunks: StatItem[];
+/* ---------------- Types ---------------- */
+
+type Health = 'ok' | 'warn' | 'down' | 'pending';
+
+type KvHealthPayload = {
+  ok?: boolean;
+  status?: string;
+  info?: string;
+  redis_url?: string;
 };
 
-async function getBaseUrl(): Promise<string> {
-  // Prefer explicit env in prod; fallback to request headers (works locally & on Vercel)
-  if (process.env.NEXT_PUBLIC_BASE_URL && process.env.NEXT_PUBLIC_BASE_URL.trim()) {
-    return process.env.NEXT_PUBLIC_BASE_URL.trim();
-  }
-  const h = await headers();
-  const proto = h.get("x-forwarded-proto") ?? "http";
-  const host = h.get("host") ?? "localhost:3000";
-  return `${proto}://${host}`;
+type InsightsTotals = { all_time: number; last_7_days: number };
+type SeriesPoint = { day: string; count: number };
+type TopItem = { key: string; count: number };
+
+type InsightsPayload = {
+  totals?: InsightsTotals;
+  series_7d?: SeriesPoint[];
+  top_queries?: TopItem[];
+  top_pages?: TopItem[];
+  top_chunks?: TopItem[];
+  // allow older shapes too
+  all_time?: number;
+  last_7_days?: number;
+  series?: SeriesPoint[];
+};
+
+/* ---------------- Tiny safe helpers (no `any`) ---------------- */
+
+type UnknownRec = Record<string, unknown>;
+function isObj(v: unknown): v is UnknownRec {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+function toNumber(v: unknown, fallback = 0): number {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+function pick<T extends UnknownRec, K extends string>(obj: T, key: K): unknown {
+  return obj[key];
+}
+function pickObj(obj: UnknownRec, key: string): UnknownRec {
+  const v = obj[key];
+  return isObj(v) ? v : {};
 }
 
-async function getData(): Promise<AnalyticsResponse> {
-  const base = await getBaseUrl();
-  const res = await fetch(`${base}/api/analytics`, { cache: "no-store" });
-  if (!res.ok) {
-    throw new Error(`Failed to load analytics: ${res.status}`);
+/* ---------------- Normalizers ---------------- */
+
+function normalizeKvHealth(raw: unknown): { health: Health; detail?: string } {
+  if (!isObj(raw)) return { health: 'down', detail: 'no payload' };
+  const ok = Boolean(pick(raw, 'ok'));
+  const status = String((pick(raw, 'status') ?? '') as string);
+  const info = String((pick(raw, 'info') ?? '') as string);
+
+  if (ok || status.toLowerCase() === 'ok' || status.toLowerCase() === 'healthy') {
+    return { health: 'ok', detail: info || 'KV reachable' };
   }
-  return (await res.json()) as AnalyticsResponse;
+
+  // If we got a JSON object back but not OK, call it warn (degraded)
+  if (Object.keys(raw).length > 0) {
+    return { health: 'warn', detail: status || info || 'KV responded with issues' };
+  }
+  return { health: 'down', detail: 'no response' };
 }
 
-export default async function Admin() {
-  const data = await getData();
+function normalizeInsightsHealth(raw: unknown): {
+  health: Health;
+  totals?: InsightsTotals;
+  detail?: string;
+} {
+  if (!isObj(raw)) return { health: 'down', detail: 'no payload' };
 
-  const Box = ({ children }: { children: React.ReactNode }) => (
-    <div className="border rounded p-3">{children}</div>
+  // Accept both new and flat shapes
+  const totalsObj = isObj(pick(raw, 'totals')) ? (pick(raw, 'totals') as UnknownRec) : {};
+  const all_time =
+    toNumber(pick(totalsObj, 'all_time'), NaN) ||
+    toNumber(pick(raw, 'all_time'), NaN);
+  const last_7_days =
+    toNumber(pick(totalsObj, 'last_7_days'), NaN) ||
+    toNumber(pick(raw, 'last_7_days'), NaN);
+
+  const hasNumbers = Number.isFinite(all_time) || Number.isFinite(last_7_days);
+  if (hasNumbers) {
+    return {
+      health: 'ok',
+      totals: {
+        all_time: Number.isFinite(all_time) ? all_time : 0,
+        last_7_days: Number.isFinite(last_7_days) ? last_7_days : 0,
+      },
+      detail: 'Insights reachable',
+    };
+  }
+
+  // If it’s an object but totals missing, call it warn
+  return { health: 'warn', detail: 'Insights responded without totals' };
+}
+
+/* ---------------- UI components ---------------- */
+
+function HealthChip({
+  label,
+  state,
+  detail,
+  right,
+}: {
+  label: string;
+  state: Health;
+  detail?: string;
+  right?: React.ReactNode;
+}) {
+  const base =
+    'inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium';
+  const cls =
+    state === 'ok'
+      ? 'border-green-300 bg-green-100 text-green-900 dark:border-green-700 dark:bg-green-900/30 dark:text-green-100'
+      : state === 'warn'
+      ? 'border-yellow-300 bg-yellow-100 text-yellow-900 dark:border-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-100'
+      : state === 'pending'
+      ? 'border-zinc-300 bg-zinc-100 text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-200'
+      : 'border-red-300 bg-red-100 text-red-900 dark:border-red-700 dark:bg-red-900/30 dark:text-red-100';
+
+  const icon =
+    state === 'ok' ? '✅' : state === 'warn' ? '⚠️' : state === 'pending' ? '⏳' : '🛑';
+
+  return (
+    <div className={`${base} ${cls}`}>
+      <span>{icon}</span>
+      <span className="font-semibold">{label}</span>
+      {detail && <span className="opacity-80">· {detail}</span>}
+      {right && <span className="ml-1">{right}</span>}
+    </div>
+  );
+}
+
+/* ---------------- Page ---------------- */
+
+export default function AdminPage() {
+  const [kv, setKv] = useState<{ health: Health; detail?: string }>({
+    health: 'pending',
+  });
+  const [sb, setSb] = useState<{ health: Health; detail?: string; totals?: InsightsTotals }>({
+    health: 'pending',
+  });
+  const [checkedAt, setCheckedAt] = useState<string>('');
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        // KV health
+        const kvRes = await fetch('/api/kv/health', { cache: 'no-store' });
+        const kvJson: unknown = kvRes.ok ? await kvRes.json() : null;
+        const kvNorm = normalizeKvHealth(kvJson);
+        if (!cancelled) setKv(kvNorm);
+      } catch {
+        if (!cancelled) setKv({ health: 'down', detail: 'fetch failed' });
+      }
+
+      try {
+        // Supabase health via insights
+        const sbRes = await fetch('/api/insights', { cache: 'no-store' });
+        const sbJson: unknown = sbRes.ok ? await sbRes.json() : null;
+        const sbNorm = normalizeInsightsHealth(sbJson);
+        if (!cancelled) setSb(sbNorm);
+      } catch {
+        if (!cancelled) setSb({ health: 'down', detail: 'fetch failed' });
+      }
+
+      if (!cancelled) setCheckedAt(new Date().toLocaleString());
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const kvOpsLink = useMemo(
+    () => (
+      <a
+        href="/api/kv/ops?op=llen"
+        className="rounded border border-current/30 px-2 py-0.5 text-[10px] opacity-80 hover:opacity-100"
+      >
+        ops
+      </a>
+    ),
+    []
   );
 
   return (
-    <main className="p-6 max-w-4xl mx-auto">
-      <h1 className="text-2xl font-semibold mb-4">Book2AI — Analytics</h1>
-      <p className="text-sm mb-4">Totals: {data.totals?.queries ?? 0} queries</p>
+    <main className="mx-auto max-w-5xl px-6 py-10 text-zinc-900 dark:text-zinc-100">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <h1 className="text-2xl font-semibold">Admin</h1>
+        <IntegrityBadge />
+      </div>
+      <p className="text-sm text-zinc-600 dark:text-zinc-300 mb-6">
+        Real-time counters and backend health for your Book2AI demo.
+      </p>
 
-      <div className="grid md:grid-cols-3 gap-4">
-        <Box>
-          <h2 className="font-semibold mb-2">Top Queries</h2>
-          <ul className="text-sm space-y-1">
-            {data.topQueries?.map((x, i) => (
-              <li key={i}>
-                {x.key} — <b>{x.count}</b>
-              </li>
-            ))}
-          </ul>
-        </Box>
-        <Box>
-          <h2 className="font-semibold mb-2">Top Page Spans</h2>
-          <ul className="text-sm space-y-1">
-            {data.topPages?.map((x, i) => (
-              <li key={i}>
-                [{x.key}] — <b>{x.count}</b>
-              </li>
-            ))}
-          </ul>
-        </Box>
-        <Box>
-          <h2 className="font-semibold mb-2">Top Chunks</h2>
-          <ul className="text-sm space-y-1">
-            {data.topChunks?.map((x, i) => (
-              <li key={i}>
-                {x.key} — <b>{x.count}</b>
-              </li>
-            ))}
-          </ul>
-        </Box>
+      {/* Health row */}
+      <div className="mb-6 flex flex-wrap items-center gap-2">
+        <HealthChip label="KV" state={kv.health} detail={kv.detail} right={kvOpsLink} />
+        <HealthChip
+          label="Supabase"
+          state={sb.health}
+          detail={
+            sb.totals
+              ? `all-time ${sb.totals.all_time} · last 7d ${sb.totals.last_7_days}`
+              : sb.detail
+          }
+        />
+        <span className="text-xs text-zinc-600 dark:text-zinc-400 ml-2">
+          Last checked: {checkedAt || '—'}
+        </span>
+      </div>
+
+      {/* Minimal live info (non-blocking, only if insights responded) */}
+      {sb.totals && (
+        <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="text-sm font-medium mb-2">Quick Totals</div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+              <div className="text-xs text-zinc-600 dark:text-zinc-300">All-time queries</div>
+              <div className="text-xl font-semibold">{sb.totals.all_time}</div>
+            </div>
+            <div className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+              <div className="text-xs text-zinc-600 dark:text-zinc-300">Last 7 days</div>
+              <div className="text-xl font-semibold">{sb.totals.last_7_days}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Helper links */}
+      <div className="mt-6 text-sm">
+        <div className="mb-2 font-medium">Shortcuts</div>
+        <ul className="list-disc pl-5 space-y-1">
+          <li>
+            <a className="underline hover:no-underline" href="/api/kv/health">
+              /api/kv/health
+            </a>{' '}
+            — KV readiness
+          </li>
+          <li>
+            <a className="underline hover:no-underline" href="/api/kv/ops?op=lrange">
+              /api/kv/ops?op=lrange
+            </a>{' '}
+            — recent queue peek (token-guarded in prod)
+          </li>
+          <li>
+            <a className="underline hover:no-underline" href="/api/insights">
+              /api/insights
+            </a>{' '}
+            — Supabase-backed insights
+          </li>
+          <li>
+            <a className="underline hover:no-underline" href="/creator">
+              /creator
+            </a>{' '}
+            — dashboard
+          </li>
+        </ul>
       </div>
     </main>
   );
