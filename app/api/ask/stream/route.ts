@@ -65,14 +65,14 @@ function sseResponse(q: string, answer: string, sources: unknown[]) {
       send({ type: 'meta', q });
 
       // short chunks encourage visible typing
-      const chunks = chunkWords(answer, 4, 8);
+      const chunks = chunkWords(answer, 3, 6);
       let i = 0;
 
       const pump = () => {
         if (i < chunks.length) {
           send({ type: 'chunk', delta: chunks[i++] });
           // Tiny delay lets proxies flush; 15–30ms looks smooth
-          setTimeout(pump, 20);
+          setTimeout(pump, 10);
         } else {
           send({ type: 'done', sources, totalChunks: chunks.length });
           controller.close();
