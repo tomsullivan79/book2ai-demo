@@ -16,6 +16,26 @@ function cssEscape(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`);
 }
 
+function getChunkId(params: ReturnType<typeof useSearchParams> | null): string | null {
+  // 1) Try Next's search params
+  const fromHook = params?.get('chunk');
+  if (fromHook) return fromHook;
+
+  // 2) Fallback to the real URL (helps when the hook isn't ready yet at first paint)
+  if (typeof window !== 'undefined') {
+    try {
+      const u = new URL(window.location.href);
+      const q = u.searchParams.get('chunk');
+      if (q) return q;
+      // 3) As a last resort, support #<id> only
+      if (u.hash) return decodeURIComponent(u.hash.replace(/^#/, ''));
+    } catch {
+      /* no-op */
+    }
+  }
+  return null;
+}
+
 function buildSelectors(id: string): string[] {
   const variants = new Set<string>();
   const raw = id;
@@ -31,7 +51,6 @@ function buildSelectors(id: string): string[] {
     variants.add(`[data-id="${esc}"]`);
     variants.add(`[data-key="${esc}"]`);
     variants.add(`[data-chunk="${esc}"]`);
-    // partial matches as a last resort
     variants.add(`[data-chunk-id*="${esc}"]`);
     variants.add(`[data-id*="${esc}"]`);
     variants.add(`[data-key*="${esc}"]`);
@@ -98,30 +117,36 @@ function findTarget(id: string): HTMLElement | null {
 }
 
 /** Bold-only effect for ~3s (no bg, no large outline) */
-function scrollAndBold(el: HTMLElement) {
+function scrollAndBold(container: HTMLElement) {
+  // Prefer the <pre> inside the container if present
+  const target = container.tagName !== 'PRE' ? container.querySelector<HTMLElement>('pre') ?? container : container;
+
   const prev = {
-    fontWeight: el.style.fontWeight,
-    textDecoration: el.style.textDecoration,
-    scrollMarginTop: el.style.scrollMarginTop,
+    scrollMarginTop: target.style.scrollMarginTop,
+    fontWeight: target.style.fontWeight,
+    textDecoration: target.style.textDecoration,
   };
 
-  // prefer scrolling the <pre> itself if present under the container
-  const pre = el.tagName !== 'PRE' ? el.querySelector<HTMLElement>('pre') : el;
-  const target = pre ?? el;
-
+  // ensure we don't land under any fixed header
   target.style.scrollMarginTop = '80px';
+
+  // Scroll container first for better positioning, then the inner <pre> if different
   try {
-    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    container.scrollIntoView({ behavior: 'smooth', block: 'center' });
   } catch {
-    target.scrollIntoView();
+    container.scrollIntoView();
+  }
+  if (target !== container) {
+    try {
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } catch {
+      target.scrollIntoView();
+    }
   }
 
-  // make text clearly bold without altering layout too long
   const prevFW = target.style.fontWeight;
-  target.style.fontWeight = '700';
-
-  // subtle underline to improve discoverability on dark themes
   const prevTD = target.style.textDecoration;
+  target.style.fontWeight = '700';
   target.style.textDecoration = 'underline';
 
   const timeout = setTimeout(() => {
@@ -133,25 +158,18 @@ function scrollAndBold(el: HTMLElement) {
   return () => clearTimeout(timeout);
 }
 
-/**
- * DeepLinker:
- * - Reads ?chunk= from the URL.
- * - Finds a tight container (prefer <pre>), avoids body/main.
- * - Bold-highlight for 3s.
- * - Retries briefly, then uses MutationObserver (up to 5s).
- */
 export default function DeepLinker() {
   const params = useSearchParams();
 
   useEffect(() => {
-    const chunk = params.get('chunk');
-    if (!chunk) return;
+    const id = getChunkId(params);
+    if (!id) return;
 
     let cancelled = false;
     let cleanup: (() => void) | undefined;
 
     const attempt = () => {
-      const target = findTarget(chunk);
+      const target = findTarget(id);
       if (target) {
         cleanup = scrollAndBold(target);
         return true;
@@ -159,42 +177,45 @@ export default function DeepLinker() {
       return false;
     };
 
-    // 1) immediate
-    if (attempt()) return () => cleanup && cleanup();
+    // 0) microtask tick (gives params/DOM a beat to hydrate)
+    const t0 = setTimeout(() => {
+      if (attempt()) return;
 
-    // 2) quick retries (hydration)
-    const quick = async () => {
-      for (let i = 0; i < 5 && !cancelled; i++) {
-        await sleep(150);
-        if (attempt()) return true;
-      }
-      return false;
-    };
-
-    // 3) observe up to 5s
-    const observeUntilFound = () => {
-      const deadline = Date.now() + 5000;
-      const obs = new MutationObserver(() => {
-        if (Date.now() > deadline) {
-          obs.disconnect();
-          return;
+      // 1) quick retries
+      const quick = async () => {
+        for (let i = 0; i < 5 && !cancelled; i++) {
+          await sleep(150);
+          if (attempt()) return true;
         }
-        if (attempt()) {
-          obs.disconnect();
-        }
-      });
-      obs.observe(document.body, { childList: true, subtree: true, attributes: true });
+        return false;
+      };
 
-      const endTimer = setTimeout(() => obs.disconnect(), 5200);
-      cleanup = () => clearTimeout(endTimer);
-    };
+      // 2) observer up to 5s
+      const observeUntilFound = () => {
+        const deadline = Date.now() + 5000;
+        const obs = new MutationObserver(() => {
+          if (Date.now() > deadline) {
+            obs.disconnect();
+            return;
+          }
+          if (attempt()) {
+            obs.disconnect();
+          }
+        });
+        obs.observe(document.body, { childList: true, subtree: true, attributes: true });
 
-    void (async () => {
-      if (!(await quick()) && !cancelled) observeUntilFound();
-    })();
+        const endTimer = setTimeout(() => obs.disconnect(), 5200);
+        cleanup = () => clearTimeout(endTimer);
+      };
+
+      void (async () => {
+        if (!(await quick()) && !cancelled) observeUntilFound();
+      })();
+    }, 0);
 
     return () => {
       cancelled = true;
+      clearTimeout(t0);
       if (cleanup) cleanup();
     };
   }, [params]);
