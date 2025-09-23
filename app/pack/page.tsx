@@ -36,31 +36,35 @@ export default function PackPage() {
       try {
         const res = await fetch('/api/pack/integrity', { cache: 'no-store' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = await res.json();
-        if (!canceled) setReport(json as IntegrityReport);
-      } catch (e: any) {
-        if (!canceled) setError(e?.message || 'Failed to load integrity report');
+        const json: IntegrityReport = await res.json();
+        if (!canceled) setReport(json);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (!canceled) setError(msg || 'Failed to load integrity report');
       } finally {
         if (!canceled) setLoading(false);
       }
     }
     load();
-    return () => { canceled = true; };
+    return () => {
+      canceled = true;
+    };
   }, []);
 
   const allOk = report?.sealed === true;
 
   const hashesForClipboard = useMemo(() => {
     if (!report) return '';
-    // Produce a simple lines format, easy to paste into docs or PRs.
     const lines: string[] = [];
     lines.push(`# Pack: ${report.manifest.id}`);
     if (report.manifest.title) lines.push(`# Title: ${report.manifest.title}`);
     if (report.manifest.author) lines.push(`# Author: ${report.manifest.author}`);
     lines.push('');
     for (const f of report.files) {
-      const status = f.ok ? 'OK' : (f.expected ? 'MISMATCH' : 'UNSEALED');
-      lines.push(`${f.path}\n  computed: ${f.computed ?? '—'}\n  expected: ${f.expected ?? '—'}\n  status:   ${status}`);
+      const status = f.expected ? (f.ok ? 'OK' : 'MISMATCH') : 'UNSEALED';
+      lines.push(
+        `${f.path}\n  computed: ${f.computed ?? '—'}\n  expected: ${f.expected ?? '—'}\n  status:   ${status}`
+      );
     }
     return lines.join('\n');
   }, [report]);
@@ -69,7 +73,8 @@ export default function PackPage() {
     try {
       const res = await fetch('/api/pack/integrity', { cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = new Blob([await res.text()], { type: 'application/json' });
+      const text = await res.text();
+      const blob = new Blob([text], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       const fname = `integrity-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
@@ -79,8 +84,9 @@ export default function PackPage() {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-    } catch (e: any) {
-      setError(e?.message || 'Failed to download JSON');
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg || 'Failed to download JSON');
     }
   }
 
@@ -113,11 +119,13 @@ export default function PackPage() {
       <p className="text-sm text-gray-600 mb-6">Cryptographic integrity for your content pack.</p>
 
       {loading && <div className="text-sm text-gray-500">Loading…</div>}
+
       {error && !loading && (
         <div className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
           {error}
         </div>
       )}
+
       {!loading && report && (
         <>
           <div className="mb-5 rounded-xl border bg-white p-4 shadow-sm">
@@ -180,10 +188,7 @@ export default function PackPage() {
               </thead>
               <tbody>
                 {report.files.map((f) => {
-                  const ok = !!f.ok;
-                  const status = f.expected
-                    ? ok ? 'OK' : 'Mismatch'
-                    : 'Unsealed';
+                  const showOk = Boolean(f.ok && f.expected);
                   return (
                     <tr key={f.path} className="border-t">
                       <td className="px-4 py-2 font-mono">{f.path}</td>
@@ -191,7 +196,7 @@ export default function PackPage() {
                       <td className="px-4 py-2 font-mono text-xs break-all">{f.expected ?? '—'}</td>
                       <td className="px-4 py-2 font-mono text-xs break-all">{f.computed ?? '—'}</td>
                       <td className="px-4 py-2">
-                        <Badge ok={ok && !!f.expected} />
+                        <Badge ok={showOk} />
                       </td>
                       <td className="px-4 py-2">{typeof f.size === 'number' ? f.size : '—'}</td>
                     </tr>
@@ -204,7 +209,8 @@ export default function PackPage() {
           {!allOk && (
             <div className="mt-4 rounded-md border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-900">
               Tip: To seal a file, copy its <span className="font-mono">computed</span> hash into
-              the <span className="font-mono">expected</span> field in <span className="font-mono">public/pack/manifest.json</span>, then redeploy.
+              the <span className="font-mono">expected</span> field in{' '}
+              <span className="font-mono">public/pack/manifest.json</span>, then redeploy.
             </div>
           )}
         </>
