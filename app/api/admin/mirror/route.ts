@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
-import { headers } from 'next/headers';
 
-export async function POST() {
+export async function POST(req: Request) {
   const token = process.env.CRON_SECRET;
   if (!token) {
     return NextResponse.json(
@@ -10,23 +9,26 @@ export async function POST() {
     );
   }
 
-  // Build absolute base from incoming request headers (reliable on Vercel)
-  const h = headers();
-  const host = h.get('x-forwarded-host') ?? h.get('host');
-  const proto = h.get('x-forwarded-proto') ?? 'https';
+  // Build absolute base from the current request (reliable on Vercel)
+  const host =
+    req.headers.get('x-forwarded-host') ?? req.headers.get('host');
+  const proto =
+    req.headers.get('x-forwarded-proto') ?? 'https';
+
   if (!host) {
     return NextResponse.json(
-      { ok: false, error: 'Unable to resolve host from headers' },
+      { ok: false, error: 'Unable to resolve host from request headers' },
       { status: 500 }
     );
   }
+
   const base = `${proto}://${host}`;
   const url = `${base}/api/cron/mirror?token=${encodeURIComponent(token)}`;
 
   try {
     const res = await fetch(url, { cache: 'no-store' });
 
-    // Read raw text first so we can return useful details even on non-JSON errors
+    // Read raw text first so we can bubble up non-JSON bodies
     const raw = await res.text();
     let data: unknown;
     try {
