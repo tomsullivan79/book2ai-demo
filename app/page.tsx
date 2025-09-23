@@ -3,9 +3,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import IntegrityBadge from './components/IntegrityBadge';
 
+/** ---- Types ---- */
 type Source = { id: string; page?: number | null; score?: number | null; text?: string | null };
 type AskResult = { answer: string; sources: Source[] };
 
+/** ---- Helpers ---- */
 function toNumber(v: unknown): number | null {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   const n = Number(v);
@@ -60,9 +62,12 @@ export default function HomePage() {
   const autoRanRef = useRef(false);
   const esRef = useRef<EventSource | null>(null);
 
+  /* Focus input */
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  /* Restore last q once */
   useEffect(() => {
     try {
       const saved = localStorage.getItem(LS_KEY_LAST_Q);
@@ -71,6 +76,29 @@ export default function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /** Cancel streaming (Stop button / Esc) */
+  const cancelStream = useCallback(() => {
+    if (esRef.current) {
+      try {
+        esRef.current.close();
+      } catch {}
+      esRef.current = null;
+    }
+    setLoading(false);
+  }, []);
+
+  /* Bind Esc to cancel while streaming */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && esRef.current) {
+        e.preventDefault();
+        cancelStream();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [cancelStream]);
+
   /** ---- Streaming ask via EventSource (SSE GET) ---- */
   const ask = useCallback(
     async (query: string, opts?: { preserveRun?: boolean }) => {
@@ -78,7 +106,9 @@ export default function HomePage() {
 
       // close any prior stream
       if (esRef.current) {
-        try { esRef.current.close(); } catch {}
+        try {
+          esRef.current.close();
+        } catch {}
         esRef.current = null;
       }
 
@@ -104,7 +134,6 @@ export default function HomePage() {
         esRef.current = es;
 
         es.onmessage = (ev) => {
-          // Expect "data: {...}"
           const payload = ev.data;
           if (!payload) return;
           let evt: unknown;
@@ -128,7 +157,9 @@ export default function HomePage() {
             const norm = normalizeAsk({ answer: (result?.answer ?? '').trim(), sources: srcArr });
             setResult((prev) => ({ answer: (prev?.answer ?? '').trim(), sources: norm.sources }));
             void showLoggedToast();
-            es.close();
+            try {
+              es.close();
+            } catch {}
             esRef.current = null;
             setLoading(false);
           } else if (type === 'error') {
@@ -138,8 +169,9 @@ export default function HomePage() {
         };
 
         es.onerror = () => {
-          // close and surface a soft error; user can retry
-          try { es.close(); } catch {}
+          try {
+            es.close();
+          } catch {}
           esRef.current = null;
           setLoading(false);
           setError((prev) => prev || 'Stream error');
@@ -153,7 +185,7 @@ export default function HomePage() {
     [result?.answer]
   );
 
-  /** ---- Autorun (unchanged) ---- */
+  /** Autorun (unchanged behavior) */
   useEffect(() => {
     try {
       const u = new URL(window.location.href);
@@ -170,11 +202,13 @@ export default function HomePage() {
     } catch {}
   }, [ask]);
 
-  /** ---- Handlers ---- */
+  /** Handlers */
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const next = e.target.value;
     setQ(next);
-    try { localStorage.setItem(LS_KEY_LAST_Q, next); } catch {}
+    try {
+      localStorage.setItem(LS_KEY_LAST_Q, next);
+    } catch {}
   }
   function getShareUrl(forQ: string): string {
     const current = new URL(window.location.href);
@@ -187,7 +221,7 @@ export default function HomePage() {
     await ask(q, { preserveRun: false });
   }
 
-  /** ---- Insights toast ---- */
+  /** Logged toast */
   async function showLoggedToast() {
     try {
       const r = await fetch('/api/insights', { cache: 'no-store' });
@@ -212,7 +246,7 @@ export default function HomePage() {
     }
   }
 
-  /** ---- Clipboard ---- */
+  /** Clipboard text */
   const clipboardText = useMemo(() => {
     if (!result) return '';
     const lines: string[] = [];
@@ -229,14 +263,24 @@ export default function HomePage() {
   }, [result]);
 
   async function copyAnswer() {
-    try { await navigator.clipboard.writeText(clipboardText); setCopiedAnswer('Copied!'); }
-    catch { setCopiedAnswer('Copy failed'); }
-    finally { setTimeout(() => setCopiedAnswer(null), 1500); }
+    try {
+      await navigator.clipboard.writeText(clipboardText);
+      setCopiedAnswer('Copied!');
+    } catch {
+      setCopiedAnswer('Copy failed');
+    } finally {
+      setTimeout(() => setCopiedAnswer(null), 1500);
+    }
   }
   async function copyShareLink() {
-    try { await navigator.clipboard.writeText(getShareUrl(q)); setCopiedLink('Link copied!'); }
-    catch { setCopiedLink('Copy failed'); }
-    finally { setTimeout(() => setCopiedLink(null), 1500); }
+    try {
+      await navigator.clipboard.writeText(getShareUrl(q));
+      setCopiedLink('Link copied!');
+    } catch {
+      setCopiedLink('Copy failed');
+    } finally {
+      setTimeout(() => setCopiedLink(null), 1500);
+    }
   }
 
   return (
@@ -264,6 +308,16 @@ export default function HomePage() {
         >
           {loading ? 'Streaming…' : 'Ask'}
         </button>
+        {loading && (
+          <button
+            type="button"
+            onClick={cancelStream}
+            className="rounded-lg border border-red-300 px-3 py-2 text-sm text-red-700 hover:bg-red-50 dark:border-red-600 dark:text-red-200 dark:hover:bg-red-900/30"
+            title="Stop streaming (Esc)"
+          >
+            Stop
+          </button>
+        )}
       </form>
 
       {error && (
