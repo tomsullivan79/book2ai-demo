@@ -75,30 +75,30 @@ function normalizeInsightsHealth(raw: unknown): {
 } {
   if (!isObj(raw)) return { health: 'down', detail: 'no payload' };
 
-  // Accept both new and flat shapes
   const totalsObj = isObj(pick(raw, 'totals')) ? (pick(raw, 'totals') as UnknownRec) : {};
   const all_time =
-    toNumber(pick(totalsObj, 'all_time'), NaN) ||
-    toNumber(pick(raw, 'all_time'), NaN);
+    (typeof pick(totalsObj, 'all_time') === 'number' ? (pick(totalsObj, 'all_time') as number) : undefined) ??
+    (typeof pick(totalsObj, 'all') === 'number' ? (pick(totalsObj, 'all') as number) : undefined) ??
+    (typeof pick(raw, 'all_time') === 'number' ? (pick(raw, 'all_time') as number) : undefined);
   const last_7_days =
-    toNumber(pick(totalsObj, 'last_7_days'), NaN) ||
-    toNumber(pick(raw, 'last_7_days'), NaN);
+    (typeof pick(totalsObj, 'last_7_days') === 'number' ? (pick(totalsObj, 'last_7_days') as number) : undefined) ??
+    (typeof pick(totalsObj, 'last7') === 'number' ? (pick(totalsObj, 'last7') as number) : undefined) ??
+    (typeof pick(raw, 'last_7_days') === 'number' ? (pick(raw, 'last_7_days') as number) : undefined);
 
-  const hasNumbers = Number.isFinite(all_time) || Number.isFinite(last_7_days);
+  const hasNumbers = typeof all_time === 'number' || typeof last_7_days === 'number';
   if (hasNumbers) {
     return {
       health: 'ok',
       totals: {
-        all_time: Number.isFinite(all_time) ? all_time : 0,
-        last_7_days: Number.isFinite(last_7_days) ? last_7_days : 0,
+        all_time: typeof all_time === 'number' ? all_time : 0,
+        last_7_days: typeof last_7_days === 'number' ? last_7_days : 0,
       },
       detail: 'Insights reachable',
     };
   }
-
-  // If it’s an object but totals missing, call it warn
   return { health: 'warn', detail: 'Insights responded without totals' };
 }
+
 
 /* ---------------- UI components ---------------- */
 

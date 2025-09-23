@@ -22,35 +22,112 @@ function pickObj(obj: UnknownRec, key: string): UnknownRec { const v = obj[key];
 function pickArr(obj: UnknownRec, key: string): unknown[] { const v = obj[key]; return Array.isArray(v) ? v : []; }
 
 function normalizeInsights(raw: unknown): Insights {
-  const root: UnknownRec = isObj(raw) ? raw : {};
-  const totalsObj = pickObj(root, 'totals');
-  const totals = {
-    all_time: toNumber(pick(totalsObj, 'all_time') ?? pick(root, 'all_time')),
-    last_7_days: toNumber(pick(totalsObj, 'last_7_days') ?? pick(root, 'last_7_days')),
+  const r = (raw ?? {}) as Record<string, unknown>;
+
+  // --- totals (accept all shapes) ---
+  const totalsObj = (typeof r.totals === 'object' && r.totals) ? (r.totals as Record<string, unknown>) : {};
+  const all_time =
+    (typeof totalsObj.all_time === 'number' ? totalsObj.all_time : undefined) ??
+    (typeof totalsObj.all === 'number' ? totalsObj.all : undefined) ??
+    (typeof (r as any).all_time === 'number' ? (r as any).all_time : undefined) ?? 0;
+  const last_7_days =
+    (typeof totalsObj.last_7_days === 'number' ? totalsObj.last_7_days : undefined) ??
+    (typeof totalsObj.last7 === 'number' ? totalsObj.last7 : undefined) ??
+    (typeof (r as any).last_7_days === 'number' ? (r as any).last_7_days : undefined) ?? 0;
+
+  // --- series (series_7d or series) ---
+  const seriesArr: unknown[] = Array.isArray((r as any).series_7d)
+    ? ((r as any).series_7d as unknown[])
+    : Array.isArray((r as any).series)
+    ? ((r as any).series as unknown[])
+    : [];
+  const series_7d = seriesArr
+    .map((p) => {
+      const o = (p ?? {}) as Record<string, unknown>;
+      const day = typeof o.day === 'string' ? o.day : typeof o.date === 'string' ? o.date : '';
+      const count = typeof o.count === 'number' ? o.count : typeof o.value === 'number' ? o.value : 0;
+      return day ? { day, count } : null;
+    })
+    .filter(Boolean) as SeriesPoint[];
+
+  // --- tops (snake_case OR camelCase) ---
+  const tqArr: unknown[] =
+    Array.isArray((r as any).top_queries) ? ((r as any).top_queries as unknown[])
+    : Array.isArray((r as any).topQueries) ? ((r as any).topQueries as unknown[])
+    : Array.isArray((r as any).top?.queries) ? ((r as any).top.queries as unknown[])
+    : [];
+  const tpArr: unknown[] =
+    Array.isArray((r as any).top_pages) ? ((r as any).top_pages as unknown[])
+    : Array.isArray((r as any).topPages) ? ((r as any).topPages as unknown[])
+    : Array.isArray((r as any).top?.pages) ? ((r as any).top.pages as unknown[])
+    : [];
+  const tcArr: unknown[] =
+    Array.isArray((r as any).top_chunks) ? ((r as any).top_chunks as unknown[])
+    : Array.isArray((r as any).topChunks) ? ((r as any).topChunks as unknown[])
+    : Array.isArray((r as any).top?.chunks) ? ((r as any).top.chunks as unknown[])
+    : [];
+
+  const mapTop = (arr: unknown[]) =>
+    arr
+      .map((x) => {
+        const o = (x ?? {}) as Record<string, unknown>;
+        const key =
+          typeof o.key === 'string'
+            ? o.key
+            : typeof o.id === 'string'
+            ? o.id
+            : typeof o.name === 'string'
+            ? o.name
+            : '';
+        const count = typeof o.count === 'number' ? o.count : typeof o.value === 'number' ? o.value : 0;
+        return key ? { key, count } : null;
+      })
+      .filter(Boolean) as TopItem[];
+
+  return {
+    totals: { all_time, last_7_days },
+    series_7d,
+    top_queries: mapTop(tqArr),
+    top_pages: mapTop(tpArr),
+    top_chunks: mapTop(tcArr),
   };
-  const seriesCandidate = pickArr(root, 'series_7d').length > 0 ? pickArr(root, 'series_7d') : pickArr(root, 'series');
-  const series_7d: SeriesPoint[] = [];
-  for (const item of seriesCandidate) {
-    if (!isObj(item)) continue;
-    const day = toStringSafe(pick(item, 'day') ?? pick(item, 'date'));
-    const count = toNumber(pick(item, 'count') ?? pick(item, 'value'));
-    if (day) series_7d.push({ day, count });
+}
+No other parts of app/creator/page.tsx need to change.
+
+Patch app/admin/page.tsx (make totals accept {all,last7} too)
+Replace only the normalizeInsightsHealth function with this:
+
+tsx
+Copy code
+function normalizeInsightsHealth(raw: unknown): {
+  health: Health;
+  totals?: InsightsTotals;
+  detail?: string;
+} {
+  if (!isObj(raw)) return { health: 'down', detail: 'no payload' };
+
+  const totalsObj = isObj(pick(raw, 'totals')) ? (pick(raw, 'totals') as UnknownRec) : {};
+  const all_time =
+    (typeof pick(totalsObj, 'all_time') === 'number' ? (pick(totalsObj, 'all_time') as number) : undefined) ??
+    (typeof pick(totalsObj, 'all') === 'number' ? (pick(totalsObj, 'all') as number) : undefined) ??
+    (typeof pick(raw, 'all_time') === 'number' ? (pick(raw, 'all_time') as number) : undefined);
+  const last_7_days =
+    (typeof pick(totalsObj, 'last_7_days') === 'number' ? (pick(totalsObj, 'last_7_days') as number) : undefined) ??
+    (typeof pick(totalsObj, 'last7') === 'number' ? (pick(totalsObj, 'last7') as number) : undefined) ??
+    (typeof pick(raw, 'last_7_days') === 'number' ? (pick(raw, 'last_7_days') as number) : undefined);
+
+  const hasNumbers = typeof all_time === 'number' || typeof last_7_days === 'number';
+  if (hasNumbers) {
+    return {
+      health: 'ok',
+      totals: {
+        all_time: typeof all_time === 'number' ? all_time : 0,
+        last_7_days: typeof last_7_days === 'number' ? last_7_days : 0,
+      },
+      detail: 'Insights reachable',
+    };
   }
-  const topObj = pickObj(root, 'top');
-  const tqRaw = pickArr(root, 'top_queries').length > 0 ? pickArr(root, 'top_queries') : pickArr(topObj, 'queries');
-  const tpRaw = pickArr(root, 'top_pages').length > 0 ? pickArr(root, 'top_pages') : pickArr(topObj, 'pages');
-  const tcRaw = pickArr(root, 'top_chunks').length > 0 ? pickArr(root, 'top_chunks') : pickArr(topObj, 'chunks');
-  const mapTop = (arr: unknown[]): TopItem[] => {
-    const out: TopItem[] = [];
-    for (const item of arr) {
-      if (!isObj(item)) continue;
-      const key = toStringSafe(pick(item, 'key') ?? pick(item, 'id') ?? pick(item, 'name'));
-      const count = toNumber(pick(item, 'count') ?? pick(item, 'value'));
-      if (key) out.push({ key, count });
-    }
-    return out;
-  };
-  return { totals, series_7d, top_queries: mapTop(tqRaw), top_pages: mapTop(tpRaw), top_chunks: mapTop(tcRaw) };
+  return { health: 'warn', detail: 'Insights responded without totals' };
 }
 
 export default function CreatorPage() {
