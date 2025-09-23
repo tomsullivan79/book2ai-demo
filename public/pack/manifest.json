@@ -20,8 +20,6 @@
       "purpose": "chunks",
       "sha256": null
     }
-    // If you want to verify more files, add them here, e.g. vectors file(s)
-    // { "path": "/pack/vecs.json", "purpose": "vectors", "sha256": null }
   ],
   "created_at": "2025-09-22T00:00:00.000Z"
 }
