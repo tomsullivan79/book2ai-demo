@@ -24,6 +24,7 @@ function toNumber(v: unknown): number | null {
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
+
 /** Normalize whatever /api/ask returns into AskResult */
 function normalizeAsk(raw: unknown): AskResult {
   const root = isObj(raw) ? raw : {};
@@ -93,46 +94,98 @@ export default function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ---------- Core ask (memoized). opts.preserveRun keeps &run=1 if true ---------- */
+  /* ---------- Streamed ask ---------- */
   const ask = useCallback(
     async (query: string, opts?: { preserveRun?: boolean }) => {
       if (!query.trim()) return;
+
       setLoading(true);
       setError(null);
-      setResult(null);
+      setResult({ answer: '', sources: [] }); // start fresh
+
+      // Update URL early so the page is shareable even during stream
       try {
-        const res = await fetch('/api/ask', {
+        const current = new URL(window.location.href);
+        current.searchParams.set('q', query);
+        if (!opts?.preserveRun) current.searchParams.delete('run');
+        window.history.replaceState(null, '', current.toString());
+      } catch {
+        /* no-op */
+      }
+
+      // Persist last q
+      try {
+        localStorage.setItem(LS_KEY_LAST_Q, query);
+      } catch {
+        /* no-op */
+      }
+
+      try {
+        const res = await fetch('/api/ask/stream', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ q: query }),
           cache: 'no-store',
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json: unknown = await res.json();
-        const normalized = normalizeAsk(json);
-        setResult(normalized);
-
-        // Update URL to ?q=... without reloading (shareable)
-        try {
-          const current = new URL(window.location.href);
-          current.searchParams.set('q', query);
-          if (!opts?.preserveRun) {
-            current.searchParams.delete('run');
+        if (!res.body) {
+          // Fallback to non-stream if body missing
+          const j = await res.json().catch(() => null);
+          if (j && isObj(j) && (j['answer'] || j['sources'])) {
+            const normalized = normalizeAsk(j);
+            setResult(normalized);
+          } else {
+            throw new Error(`No stream and no JSON. HTTP ${res.status}`);
           }
-          window.history.replaceState(null, '', current.toString());
-        } catch {
-          /* no-op */
+          return;
         }
 
-        // Keep last q persisted
-        try {
-          localStorage.setItem(LS_KEY_LAST_Q, query);
-        } catch {
-          /* no-op */
-        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
 
-        // Logged toast + mini-insights
-        void showLoggedToast();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          let idx: number;
+          while ((idx = buffer.indexOf('\n')) >= 0) {
+            const line = buffer.slice(0, idx).trim();
+            buffer = buffer.slice(idx + 1);
+            if (!line) continue;
+
+            let evt: unknown;
+            try {
+              evt = JSON.parse(line);
+            } catch {
+              continue;
+            }
+            if (!isObj(evt)) continue;
+
+            const type = typeof evt['type'] === 'string' ? (evt['type'] as string) : '';
+
+            if (type === 'meta') {
+              // could show a “streaming…” chip if desired
+            } else if (type === 'chunk') {
+              const delta = typeof evt['delta'] === 'string' ? (evt['delta'] as string) : '';
+              setResult((prev) => {
+                const cur = prev ?? { answer: '', sources: [] };
+                const merged = cur.answer.length ? cur.answer + ' ' + delta : delta;
+                return { ...cur, answer: merged };
+              });
+            } else if (type === 'done') {
+              const srcArr = Array.isArray(evt['sources']) ? (evt['sources'] as unknown[]) : [];
+              // Normalize sources once at the end
+              const norm = normalizeAsk({ answer: (result?.answer ?? '').trim(), sources: srcArr });
+              setResult((prev) => ({ answer: (prev?.answer ?? '').trim(), sources: norm.sources }));
+              // Trigger the toast and insights refresh
+              void showLoggedToast();
+            } else if (type === 'error') {
+              const msg = typeof evt['message'] === 'string' ? (evt['message'] as string) : 'stream error';
+              setError(msg);
+            }
+          }
+        }
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         setError(msg || 'Failed to get answer');
@@ -140,10 +193,10 @@ export default function HomePage() {
         setLoading(false);
       }
     },
-    []
+    [result?.answer] // only used to seed the normalize at end; safe
   );
 
-  /* ---------- Read ?q= from URL. Autorun only if: has q AND (no saved) OR ?run=1 ---------- */
+  /* ---------- Autorun (unchanged behavior) ---------- */
   useEffect(() => {
     try {
       const u = new URL(window.location.href);
@@ -152,10 +205,9 @@ export default function HomePage() {
       const saved = localStorage.getItem(LS_KEY_LAST_Q) || '';
 
       if (urlQ) {
-        setQ(urlQ); // Always reflect URL text in the input
+        setQ(urlQ);
         if (!autoRanRef.current && (forceRun || !saved)) {
           autoRanRef.current = true;
-          // preserve &run=1 on this autorun call
           void ask(urlQ, { preserveRun: true });
         }
       }
@@ -164,7 +216,7 @@ export default function HomePage() {
     }
   }, [ask]);
 
-  /* ---------- Persist query on change ---------- */
+  /* ---------- Handlers ---------- */
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const next = e.target.value;
     setQ(next);
@@ -175,7 +227,6 @@ export default function HomePage() {
     }
   }
 
-  /* ---------- Build share URL (no &run by default) ---------- */
   function getShareUrl(forQ: string): string {
     const current = new URL(window.location.href);
     current.searchParams.set('q', forQ);
@@ -183,7 +234,6 @@ export default function HomePage() {
     return current.toString();
   }
 
-  /* ---------- Form submit ---------- */
   async function onAsk(e: React.FormEvent) {
     e.preventDefault();
     await ask(q, { preserveRun: false });
@@ -241,7 +291,6 @@ export default function HomePage() {
     }
   }
 
-  /* ---------- Clipboard: Share link ---------- */
   async function copyShareLink() {
     try {
       const link = getShareUrl(q);
@@ -272,29 +321,14 @@ export default function HomePage() {
           value={q}
           onChange={handleChange}
         />
-        <button
+      <button
           type="submit"
           disabled={loading}
           className="rounded-lg border border-zinc-300 px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-600 dark:hover:bg-zinc-800"
         >
-          {loading ? 'Asking…' : 'Ask'}
+          {loading ? 'Streaming…' : 'Ask'}
         </button>
       </form>
-
-      {/* Share link row */}
-      <div className="mb-4 flex items-center gap-2">
-        <button
-          onClick={copyShareLink}
-          disabled={!q.trim()}
-          className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-600 dark:hover:bg-zinc-800"
-        >
-          Copy share link
-        </button>
-        {copiedLink && <span className="text-xs text-zinc-600 dark:text-zinc-300">{copiedLink}</span>}
-        <span className="text-xs text-zinc-600 dark:text-zinc-400">
-          Tip: shareable URL uses <span className="font-mono">?q=</span>
-        </span>
-      </div>
 
       {error && (
         <div className="mb-4 rounded-md border border-red-300 bg-red-100 text-red-900 p-3 dark:border-red-700 dark:bg-red-900/40 dark:text-red-100">
@@ -320,7 +354,9 @@ export default function HomePage() {
             </div>
           </div>
 
-          <p className="mt-2 whitespace-pre-wrap text-sm leading-6">{result.answer}</p>
+          <p className="mt-2 whitespace-pre-wrap text-sm leading-6">
+            {result.answer || (loading ? '…' : '')}
+          </p>
 
           <div className="mt-4">
             <div className="text-sm font-medium mb-1">Top Sources</div>
@@ -354,13 +390,25 @@ export default function HomePage() {
               })}
               {result.sources.length === 0 && (
                 <li className="border-t border-zinc-200 py-1 text-zinc-500 dark:border-zinc-800">
-                  No sources returned
+                  {loading ? 'Fetching sources…' : 'No sources returned'}
                 </li>
               )}
             </ul>
           </div>
         </section>
       )}
+
+      {/* Share link row */}
+      <div className="mt-4 mb-4 flex items-center gap-2">
+        <button
+          onClick={copyShareLink}
+          disabled={!q.trim()}
+          className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-600 dark:hover:bg-zinc-800"
+        >
+          Copy share link
+        </button>
+        {copiedLink && <span className="text-xs text-zinc-600 dark:text-zinc-300">{copiedLink}</span>}
+      </div>
 
       {/* Toast */}
       <div
