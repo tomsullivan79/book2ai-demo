@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import IntegrityBadge from './components/IntegrityBadge';
 
 /** ---- Types tolerant to small API shape changes ---- */
@@ -82,7 +82,7 @@ export default function HomePage() {
     inputRef.current?.focus();
   }, []);
 
-  /* ---------- Restore from localStorage ---------- */
+  /* ---------- Restore from localStorage (once) ---------- */
   useEffect(() => {
     try {
       const saved = localStorage.getItem(LS_KEY_LAST_Q);
@@ -90,50 +90,11 @@ export default function HomePage() {
     } catch {
       /* no-op */
     }
-    // intentionally run once
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ---------- Read ?q= from URL, set input, auto-run once ---------- */
-  useEffect(() => {
-    try {
-      const u = new URL(window.location.href);
-      const urlQ = u.searchParams.get('q');
-      if (urlQ && !autoRanRef.current) {
-        setQ(urlQ);
-        // persist what we just loaded from URL
-        try {
-          localStorage.setItem(LS_KEY_LAST_Q, urlQ);
-        } catch {}
-        // auto-run once
-        autoRanRef.current = true;
-        void ask(urlQ);
-      }
-    } catch {
-      /* no-op */
-    }
-  }, []);
-
-  /* ---------- Persist query on change ---------- */
-  function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const next = e.target.value;
-    setQ(next);
-    try {
-      localStorage.setItem(LS_KEY_LAST_Q, next);
-    } catch {
-      /* no-op */
-    }
-  }
-
-  /* ---------- Build share URL for current q ---------- */
-  function getShareUrl(forQ: string): string {
-    const current = new URL(window.location.href);
-    current.searchParams.set('q', forQ);
-    return current.toString();
-  }
-
-  /* ---------- Core ask (also used for autorun) ---------- */
-  async function ask(query: string) {
+  /* ---------- Core ask (memoized to satisfy ESLint) ---------- */
+  const ask = useCallback(async (query: string) => {
     if (!query.trim()) return;
     setLoading(true);
     setError(null);
@@ -152,8 +113,11 @@ export default function HomePage() {
 
       // Update URL to ?q=... without reloading (shareable)
       try {
-        const share = getShareUrl(query);
-        window.history.replaceState(null, '', share);
+        const current = new URL(window.location.href);
+        current.searchParams.set('q', query);
+        // retain &run=1 only if it was explicitly present; otherwise drop it
+        if (current.searchParams.get('run') !== '1') current.searchParams.delete('run');
+        window.history.replaceState(null, '', current.toString());
       } catch {
         /* no-op */
       }
@@ -173,6 +137,46 @@ export default function HomePage() {
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  /* ---------- Read ?q= from URL. Autorun only if: has q AND (no saved) OR ?run=1 ---------- */
+  useEffect(() => {
+    try {
+      const u = new URL(window.location.href);
+      const urlQ = u.searchParams.get('q');
+      const forceRun = u.searchParams.get('run') === '1';
+      const saved = localStorage.getItem(LS_KEY_LAST_Q) || '';
+
+      if (urlQ) {
+        setQ(urlQ); // Always reflect URL text in the input
+        if (!autoRanRef.current && (forceRun || !saved)) {
+          autoRanRef.current = true;
+          void ask(urlQ);
+        }
+      }
+    } catch {
+      /* no-op */
+    }
+  }, [ask]);
+
+  /* ---------- Persist query on change ---------- */
+  function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const next = e.target.value;
+    setQ(next);
+    try {
+      localStorage.setItem(LS_KEY_LAST_Q, next);
+    } catch {
+      /* no-op */
+    }
+  }
+
+  /* ---------- Build share URL for current q ---------- */
+  function getShareUrl(forQ: string): string {
+    const current = new URL(window.location.href);
+    current.searchParams.set('q', forQ);
+    // do not force autorun in shared links by default
+    current.searchParams.delete('run');
+    return current.toString();
   }
 
   /* ---------- Form submit ---------- */
@@ -284,7 +288,7 @@ export default function HomePage() {
         </button>
         {copiedLink && <span className="text-xs text-zinc-600 dark:text-zinc-300">{copiedLink}</span>}
         <span className="text-xs text-zinc-600 dark:text-zinc-400">
-          Tip: shareable URL uses <span className="font-mono">?q=</span>
+          Tip: shareable URL uses <span className="font-mono">?q=</span> (add <span className="font-mono">&run=1</span> to force autorun)
         </span>
       </div>
 
