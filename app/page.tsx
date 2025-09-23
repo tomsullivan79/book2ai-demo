@@ -2,17 +2,19 @@
 
 import React, { useMemo, useState } from 'react';
 
-/** ---- Types that are tolerant to small API shape changes ---- */
+/** ---- Types tolerant to small API shape changes ---- */
 type Source = {
   id: string;           // normalized id (chunk id or path)
   page?: number | null; // page number if present
   score?: number | null;
   text?: string | null;
 };
-
 type AskResult = {
   answer: string;
   sources: Source[];
+};
+type Insights = {
+  totals: { all_time: number; last_7_days: number };
 };
 
 /** ---- Small helpers (no `any`) ---- */
@@ -66,6 +68,10 @@ export default function HomePage() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AskResult | null>(null);
 
+  // Toast state
+  const [toast, setToast] = useState<{ msg: string; sub?: string } | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+
   async function onAsk(e: React.FormEvent) {
     e.preventDefault();
     if (!q.trim()) return;
@@ -80,13 +86,40 @@ export default function HomePage() {
         cache: 'no-store',
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-      setResult(normalizeAsk(json));
+      const json: unknown = await res.json();
+      const normalized = normalizeAsk(json);
+      setResult(normalized);
+
+      // Fire-and-forget: nudge the user that we logged their query
+      // and try to pull /api/insights for a tiny stat.
+      void showLoggedToast();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg || 'Failed to get answer');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function showLoggedToast() {
+    try {
+      const r = await fetch('/api/insights', { cache: 'no-store' });
+      if (!r.ok) throw new Error();
+      const j: unknown = await r.json();
+      const last7 =
+        isObj(j) && isObj(j['totals']) && typeof j['totals']['last_7_days'] === 'number'
+          ? (j['totals']['last_7_days'] as number)
+          : null;
+
+      setToast({
+        msg: 'Query logged',
+        sub: last7 !== null ? `Last 7 days: ${last7}` : undefined,
+      });
+    } catch {
+      setToast({ msg: 'Query logged', sub: undefined });
+    } finally {
+      // Auto-dismiss after 4s
+      setTimeout(() => setToast(null), 4000);
     }
   }
 
@@ -115,8 +148,6 @@ export default function HomePage() {
       setTimeout(() => setCopied(null), 1500);
     }
   }
-
-  const [copied, setCopied] = useState<string | null>(null);
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-10 text-zinc-900 dark:text-zinc-100">
@@ -174,11 +205,17 @@ export default function HomePage() {
                   className="border-t border-zinc-200 py-1 dark:border-zinc-800"
                 >
                   <span className="font-mono">{s.id}</span>
-                  {typeof s.page === 'number' && <span className="text-zinc-600 dark:text-zinc-300"> (p.{s.page})</span>}
+                  {typeof s.page === 'number' && (
+                    <span className="text-zinc-600 dark:text-zinc-300"> (p.{s.page})</span>
+                  )}
                   {typeof s.score === 'number' && (
                     <span className="ml-1 text-xs text-zinc-500">• score {s.score.toFixed(3)}</span>
                   )}
-                  {s.text && <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300 line-clamp-3">{s.text}</div>}
+                  {s.text && (
+                    <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300 line-clamp-3">
+                      {s.text}
+                    </div>
+                  )}
                 </li>
               ))}
               {result.sources.length === 0 && (
@@ -190,6 +227,29 @@ export default function HomePage() {
           </div>
         </section>
       )}
+
+      {/* Toast */}
+      <div
+        aria-live="polite"
+        className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex justify-center px-4"
+      >
+        {toast && (
+          <div className="pointer-events-auto max-w-md rounded-xl border border-zinc-300 bg-white/95 px-4 py-3 text-sm shadow-lg backdrop-blur dark:border-zinc-700 dark:bg-zinc-900/90">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="font-medium">✅ {toast.msg}</div>
+                {toast.sub && <div className="text-xs text-zinc-600 dark:text-zinc-300">{toast.sub}</div>}
+              </div>
+              <a
+                href="/creator"
+                className="rounded-lg border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800"
+              >
+                Open Creator
+              </a>
+            </div>
+          </div>
+        )}
+      </div>
     </main>
   );
 }
