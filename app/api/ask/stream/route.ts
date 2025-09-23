@@ -10,7 +10,7 @@ function isObj(v: unknown): v is Record<string, unknown> {
 function s(v: unknown): string {
   return typeof v === 'string' ? v : '';
 }
-function chunkWords(text: string, min = 5, max = 10): string[] {
+function chunkWords(text: string, min = 4, max = 8): string[] {
   const words = text.split(/\s+/).filter(Boolean);
   const chunks: string[] = [];
   let i = 0;
@@ -23,7 +23,7 @@ function chunkWords(text: string, min = 5, max = 10): string[] {
   return chunks;
 }
 
-async function getUpstreamAnswer(req: Request, q: string) {
+async function fetchUpstream(req: Request, q: string, pack: string) {
   const host = req.headers.get('x-forwarded-host') ?? req.headers.get('host');
   const proto = req.headers.get('x-forwarded-proto') ?? 'https';
   if (!host) throw new Error('No host');
@@ -32,7 +32,8 @@ async function getUpstreamAnswer(req: Request, q: string) {
   const upstream = await fetch(`${base}/api/ask`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ q }),
+    // Forward `pack` (safe for current /api/ask: it can ignore if unsupported)
+    body: JSON.stringify({ q, pack }),
     cache: 'no-store',
   });
 
@@ -41,9 +42,9 @@ async function getUpstreamAnswer(req: Request, q: string) {
     throw new Error(`upstream_failed:${upstream.status}:${raw.slice(0, 200)}`);
   }
 
-  const data: unknown = await upstream.json();
-  const root = isObj(data) ? data : {};
-  const answer = s(root.answer);
+  const json: unknown = await upstream.json();
+  const root = isObj(json) ? json : {};
+  const answer = s(root['answer']);
   const sources = Array.isArray(root['sources'])
     ? (root['sources'] as unknown[])
     : Array.isArray(root['top'])
@@ -65,14 +66,14 @@ function sseResponse(q: string, answer: string, sources: unknown[]) {
       send({ type: 'meta', q });
 
       // short chunks encourage visible typing
-      const chunks = chunkWords(answer, 3, 6);
+      const chunks = chunkWords(answer, 4, 8);
       let i = 0;
 
       const pump = () => {
         if (i < chunks.length) {
           send({ type: 'chunk', delta: chunks[i++] });
-          // Tiny delay lets proxies flush; 15–30ms looks smooth
-          setTimeout(pump, 10);
+          // tiny delay to nudge intermediaries to flush
+          setTimeout(pump, 15);
         } else {
           send({ type: 'done', sources, totalChunks: chunks.length });
           controller.close();
@@ -87,36 +88,36 @@ function sseResponse(q: string, answer: string, sources: unknown[]) {
       'content-type': 'text/event-stream; charset=utf-8',
       'cache-control': 'no-cache, no-transform',
       connection: 'keep-alive',
-      // common anti-buffering hint:
       'x-accel-buffering': 'no',
-      // some stacks honor this:
       'x-no-compression': '1',
     },
   });
 }
 
-/** GET /api/ask/stream?q=... (SSE) */
+/** GET /api/ask/stream?q=...&pack=...  (preferred path for EventSource) */
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const q = url.searchParams.get('q') || '';
+  const pack = url.searchParams.get('pack') || '';
   if (!q.trim()) return NextResponse.json({ error: 'Missing q' }, { status: 400 });
 
   try {
-    const { answer, sources } = await getUpstreamAnswer(req, q);
+    const { answer, sources } = await fetchUpstream(req, q, pack);
     return sseResponse(q, answer, sources);
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
   }
 }
 
-/** POST still supported (for programmatic callers) */
+/** POST still supported for programmatic callers; forwards `pack` as well */
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
-    const q = isObj(body) ? s(body.q) : '';
+    const q = isObj(body) ? s(body['q']) : '';
+    const pack = isObj(body) ? s(body['pack']) : '';
     if (!q.trim()) return NextResponse.json({ error: 'Missing q' }, { status: 400 });
 
-    const { answer, sources } = await getUpstreamAnswer(req, q);
+    const { answer, sources } = await fetchUpstream(req, q, pack);
     return sseResponse(q, answer, sources);
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message || 'internal error' }, { status: 500 });
