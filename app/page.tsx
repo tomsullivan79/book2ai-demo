@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import IntegrityBadge from './components/IntegrityBadge';
+import PackPicker from './components/PackPicker';
 
 /** ---- Types ---- */
 type Source = { id: string; page?: number | null; score?: number | null; text?: string | null };
@@ -47,9 +48,12 @@ function normalizeAsk(raw: unknown): AskResult {
 }
 
 const LS_KEY_LAST_Q = 'b2ai:lastQ';
+const LS_KEY_PACK = 'b2ai:pack';
 
 export default function HomePage() {
   const [q, setQ] = useState('');
+  const [pack, setPack] = useState<string | null>(null);
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AskResult | null>(null);
@@ -67,21 +71,44 @@ export default function HomePage() {
     inputRef.current?.focus();
   }, []);
 
-  /* Restore last q once */
+  /* Restore last q once + initial pack from URL or LS */
   useEffect(() => {
     try {
-      const saved = localStorage.getItem(LS_KEY_LAST_Q);
-      if (saved && !q) setQ(saved);
-    } catch {}
+      const u = new URL(window.location.href);
+      const urlQ = u.searchParams.get('q');
+      const urlPack = u.searchParams.get('pack');
+      if (urlQ && !q) setQ(urlQ);
+
+      const savedPack = localStorage.getItem(LS_KEY_PACK);
+      const initPack = urlPack || savedPack;
+      if (initPack) setPack(initPack);
+    } catch {
+      /* no-op */
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /* Persist pack + mirror to URL whenever it changes */
+  useEffect(() => {
+    if (!pack) return;
+    try {
+      localStorage.setItem(LS_KEY_PACK, pack);
+      const u = new URL(window.location.href);
+      u.searchParams.set('pack', pack);
+      window.history.replaceState(null, '', u.toString());
+    } catch {
+      /* no-op */
+    }
+  }, [pack]);
 
   /** Cancel streaming (Stop button / Esc) */
   const cancelStream = useCallback(() => {
     if (esRef.current) {
       try {
         esRef.current.close();
-      } catch {}
+      } catch {
+        /* no-op */
+      }
       esRef.current = null;
     }
     setLoading(false);
@@ -108,7 +135,9 @@ export default function HomePage() {
       if (esRef.current) {
         try {
           esRef.current.close();
-        } catch {}
+        } catch {
+          /* no-op */
+        }
         esRef.current = null;
       }
 
@@ -120,16 +149,23 @@ export default function HomePage() {
       try {
         const u = new URL(window.location.href);
         u.searchParams.set('q', query);
+        if (pack) u.searchParams.set('pack', pack);
         if (!opts?.preserveRun) u.searchParams.delete('run');
         window.history.replaceState(null, '', u.toString());
-      } catch {}
+      } catch {
+        /* no-op */
+      }
       try {
         localStorage.setItem(LS_KEY_LAST_Q, query);
-      } catch {}
+      } catch {
+        /* no-op */
+      }
 
       // Open SSE connection
       try {
-        const url = `/api/ask/stream?q=${encodeURIComponent(query)}`;
+        const url = `/api/ask/stream?q=${encodeURIComponent(query)}${
+          pack ? `&pack=${encodeURIComponent(pack)}` : ''
+        }`;
         const es = new EventSource(url);
         esRef.current = es;
 
@@ -149,7 +185,7 @@ export default function HomePage() {
             const delta = typeof evt['delta'] === 'string' ? (evt['delta'] as string) : '';
             setResult((prev) => {
               const cur = prev ?? { answer: '', sources: [] };
-              const merged = cur.answer.length ? cur.answer + ' ' + delta : delta;
+              const merged = cur.answer + delta;
               return { ...cur, answer: merged };
             });
           } else if (type === 'done') {
@@ -159,7 +195,9 @@ export default function HomePage() {
             void showLoggedToast();
             try {
               es.close();
-            } catch {}
+            } catch {
+              /* no-op */
+            }
             esRef.current = null;
             setLoading(false);
           } else if (type === 'error') {
@@ -171,7 +209,9 @@ export default function HomePage() {
         es.onerror = () => {
           try {
             es.close();
-          } catch {}
+          } catch {
+            /* no-op */
+          }
           esRef.current = null;
           setLoading(false);
           setError((prev) => prev || 'Stream error');
@@ -182,7 +222,7 @@ export default function HomePage() {
         setLoading(false);
       }
     },
-    [result?.answer]
+    [pack, result?.answer]
   );
 
   /** Autorun (unchanged behavior) */
@@ -199,7 +239,9 @@ export default function HomePage() {
           void ask(urlQ, { preserveRun: true });
         }
       }
-    } catch {}
+    } catch {
+      /* no-op */
+    }
   }, [ask]);
 
   /** Handlers */
@@ -208,12 +250,15 @@ export default function HomePage() {
     setQ(next);
     try {
       localStorage.setItem(LS_KEY_LAST_Q, next);
-    } catch {}
+    } catch {
+      /* no-op */
+    }
   }
   function getShareUrl(forQ: string): string {
     const current = new URL(window.location.href);
     current.searchParams.set('q', forQ);
     current.searchParams.delete('run');
+    if (pack) current.searchParams.set('pack', pack);
     return current.toString();
   }
   async function onAsk(e: React.FormEvent) {
@@ -287,7 +332,11 @@ export default function HomePage() {
     <main className="mx-auto max-w-3xl px-6 py-10 text-zinc-900 dark:text-zinc-100">
       <div className="mb-2 flex items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold">Ask the Pack</h1>
-        <IntegrityBadge />
+        <div className="flex items-center gap-2">
+          {/* Pack selector appears only when >1 pack exists */}
+          <PackPicker value={pack ?? ''} onChange={setPack} />
+          <IntegrityBadge />
+        </div>
       </div>
       <p className="text-sm text-zinc-600 dark:text-zinc-300 mb-6">
         Query the <span className="font-medium">Scientific Advertising</span> pack and cite sources.

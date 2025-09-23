@@ -10,15 +10,12 @@ function isObj(v: unknown): v is Record<string, unknown> {
 function s(v: unknown): string {
   return typeof v === 'string' ? v : '';
 }
-function chunkWords(text: string, min = 4, max = 8): string[] {
-  const words = text.split(/\s+/).filter(Boolean);
+
+// Preserve all original whitespace (newlines, spacing)
+function chunkByChars(text: string, size = 48): string[] {
   const chunks: string[] = [];
-  let i = 0;
-  const mid = (min + max) >> 1;
-  while (i < words.length) {
-    const take = Math.min(mid, words.length - i);
-    chunks.push(words.slice(i, i + take).join(' '));
-    i += take;
+  for (let i = 0; i < text.length; i += size) {
+    chunks.push(text.slice(i, i + size));
   }
   return chunks;
 }
@@ -32,7 +29,6 @@ async function fetchUpstream(req: Request, q: string, pack: string) {
   const upstream = await fetch(`${base}/api/ask`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    // Forward `pack` (safe for current /api/ask: it can ignore if unsupported)
     body: JSON.stringify({ q, pack }),
     cache: 'no-store',
   });
@@ -62,18 +58,15 @@ function sseResponse(q: string, answer: string, sources: unknown[]) {
         controller.enqueue(enc.encode(`data: ${JSON.stringify(obj)}\n\n`));
       };
 
-      // meta
       send({ type: 'meta', q });
 
-      // short chunks encourage visible typing
-      const chunks = chunkWords(answer, 4, 8);
+      const chunks = chunkByChars(answer, 48); // ~50 chars feels “typey” and preserves \n
       let i = 0;
 
       const pump = () => {
         if (i < chunks.length) {
           send({ type: 'chunk', delta: chunks[i++] });
-          // tiny delay to nudge intermediaries to flush
-          setTimeout(pump, 15);
+          setTimeout(pump, 15); // small nudge for smooth flush
         } else {
           send({ type: 'done', sources, totalChunks: chunks.length });
           controller.close();

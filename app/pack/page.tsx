@@ -14,28 +14,57 @@ type IntegrityResponse = {
   error?: string;
 };
 
+type PackLite = { id: string; title: string };
+
 const LS_KEY_PACK = 'b2ai:pack';
 
 export default function PackPage() {
   const [pack, setPack] = useState<string | null>(null);
+  const [packs, setPacks] = useState<PackLite[]>([]);
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<IntegrityResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  // Initialize selected pack from URL or localStorage
+  // Load available packs and pick a default if needed
   useEffect(() => {
-    try {
-      const u = new URL(window.location.href);
-      const urlPack = u.searchParams.get('pack');
-      const saved = localStorage.getItem(LS_KEY_PACK);
-      const init = urlPack || saved;
-      if (init) setPack(init);
-    } catch {
-      /* no-op */
-    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/api/pack/list', { cache: 'no-store' });
+        const j = (await r.json()) as { packs?: PackLite[] };
+        const list = j.packs || [];
+        if (!cancelled) setPacks(list);
+
+        // Determine initial selection:
+        // 1) URL ?pack=
+        // 2) localStorage
+        // 3) if only one pack, select it
+        if (!cancelled) {
+          let next: string | null = null;
+          try {
+            const u = new URL(window.location.href);
+            next = u.searchParams.get('pack');
+          } catch {}
+          if (!next) {
+            try {
+              next = localStorage.getItem(LS_KEY_PACK);
+            } catch {}
+          }
+          if (!next && list.length === 1) {
+            next = list[0].id;
+          }
+          if (next) setPack(next);
+        }
+      } catch {
+        if (!cancelled) setPacks([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // Mirror current pack to URL + localStorage
+  // Mirror pack to URL + localStorage
   useEffect(() => {
     if (!pack) return;
     try {
@@ -43,12 +72,10 @@ export default function PackPage() {
       const u = new URL(window.location.href);
       u.searchParams.set('pack', pack);
       window.history.replaceState(null, '', u.toString());
-    } catch {
-      /* no-op */
-    }
+    } catch {}
   }, [pack]);
 
-  // Fetch integrity when pack changes (or on first render once pack known)
+  // Fetch integrity for selected pack
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -89,7 +116,6 @@ export default function PackPage() {
     const digestOk = data.manifest_digest_ok === true;
     const filesOk = data.files_ok === true;
     const computedCount = data.computed ? Object.keys(data.computed).length : 0;
-
     return { sealed, digestOk, filesOk, computedCount };
   }, [data]);
 
@@ -106,12 +132,16 @@ export default function PackPage() {
     </span>
   );
 
+  const currentTitle =
+    data?.pack?.title ||
+    (packs.find((p) => p.id === pack)?.title ?? (pack ? `(${pack})` : 'Pack'));
+
   return (
     <main className="mx-auto max-w-5xl px-6 py-10 text-zinc-900 dark:text-zinc-100">
       <div className="mb-2 flex items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold">Verified Pack</h1>
         <div className="flex items-center gap-2">
-          {/* Pick pack (only shows if more than one pack is installed) */}
+          {/* Pack selector appears when >1 pack exists */}
           <PackPicker value={pack ?? ''} onChange={setPack} />
           <IntegrityBadge />
         </div>
@@ -124,10 +154,7 @@ export default function PackPage() {
       <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-medium">
-              {data?.pack?.title || 'Pack'}
-              {data?.pack?.title ? '' : pack ? ` (${pack})` : ''}
-            </div>
+            <div className="text-sm font-medium">{currentTitle}</div>
             <div className="text-xs text-zinc-500">
               {pack ? `id: ${pack}` : 'No pack selected'}
             </div>
