@@ -326,11 +326,11 @@ export default function HomePage() {
             <div className="text-sm font-medium mb-1">Top Sources</div>
             <ul className="text-sm">
               {result.sources.map((s) => {
-                const link = `/source?chunk=${encodeURIComponent(s.id)}`;
+                const href = `/source?chunk=${encodeURIComponent(s.id)}#${encodeURIComponent(s.id)}`;
                 return (
                   <li key={`${s.id}-${s.page ?? ''}`} className="border-t border-zinc-200 py-1 dark:border-zinc-800">
                     <a
-                      href={link}
+                      href={href}
                       className="font-mono underline underline-offset-2 hover:no-underline"
                       title="Open in Source Browser"
                     >
