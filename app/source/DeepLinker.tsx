@@ -11,6 +11,12 @@ function slugify(id: string): string {
   return id.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
 }
 
+/** Minimal CSS selector escaper (no `any`, works well for IDs/data-attrs we generate) */
+function cssEscape(value: string): string {
+  // Escape anything that isn't alnum, underscore, or dash
+  return value.replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`);
+}
+
 function buildSelectors(id: string): string[] {
   const variants = new Set<string>();
   const raw = id;
@@ -20,7 +26,7 @@ function buildSelectors(id: string): string[] {
   const allIds = [raw, slug, ...prefixed];
 
   for (const v of allIds) {
-    const esc = typeof CSS !== 'undefined' && (CSS as any).escape ? (CSS as any).escape(v) : v;
+    const esc = cssEscape(v);
     variants.add(`#${esc}`);
     variants.add(`[id="${esc}"]`);
     variants.add(`[data-chunk-id="${esc}"]`);
@@ -46,24 +52,20 @@ function findBySelectors(id: string): HTMLElement | null {
 }
 
 function findByText(id: string): HTMLElement | null {
-  // scan likely “mono” or code-like nodes first
   const candidates = document.querySelectorAll<HTMLElement>(
     'code, kbd, pre, .font-mono, [class*="mono"], [data-field="chunk-id"], [data-role="chunk-id"], span, a, div'
   );
 
   let best: HTMLElement | null = null;
+  const word = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const wordRe = new RegExp(`\\b${word}\\b`);
+
   for (const el of candidates) {
     const txt = (el.textContent || '').trim();
     if (!txt) continue;
 
-    // match whole id or id in parentheses / brackets / “id:” etc.
-    if (
-      txt === id ||
-      txt.includes(id) ||
-      new RegExp(`\\b${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(txt)
-    ) {
+    if (txt === id || txt.includes(id) || wordRe.test(txt)) {
       best = el;
-      // Prefer a container row if available
       const container =
         el.closest<HTMLElement>('[data-chunk-row],[data-chunk],li,[role="row"],article,section,div');
       return container || best;
@@ -80,14 +82,10 @@ function scrollAndHighlight(el: HTMLElement) {
   try {
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   } catch {
-    // fallback
     el.scrollIntoView();
   }
 
-  // Apply very visible highlight
-  el.classList.add('ring-4', 'ring-amber-400', 'rounded-md');
-  // also give a subtle bg so it pops even if ring is clipped
-  el.classList.add('bg-amber-50', 'dark:bg-amber-900/20');
+  el.classList.add('ring-4', 'ring-amber-400', 'rounded-md', 'bg-amber-50', 'dark:bg-amber-900/20');
 
   const timeout = setTimeout(() => {
     el.classList.remove('ring-4', 'ring-amber-400', 'bg-amber-50', 'dark:bg-amber-900/20');
@@ -123,10 +121,12 @@ export default function DeepLinker() {
 
     // 1) Immediate try
     if (attempt()) {
-      return () => cleanup && cleanup();
+      return () => {
+        if (cleanup) cleanup();
+      };
     }
 
-    // 2) Quick retries (hydration often finishes within a few ticks)
+    // 2) Quick retries
     const quick = async () => {
       for (let i = 0; i < 5 && !cancelled; i++) {
         await sleep(150);
@@ -135,7 +135,7 @@ export default function DeepLinker() {
       return false;
     };
 
-    // 3) MutationObserver up to 5s
+    // 3) Observe up to 5s
     const observeUntilFound = () => {
       const deadline = Date.now() + 5000;
       const obs = new MutationObserver(() => {
@@ -150,7 +150,7 @@ export default function DeepLinker() {
       obs.observe(document.body, { childList: true, subtree: true, attributes: true });
 
       const endTimer = setTimeout(() => obs.disconnect(), 5200);
-      cleanup = (() => clearTimeout(endTimer)) as unknown as () => void;
+      cleanup = () => clearTimeout(endTimer);
     };
 
     void (async () => {
