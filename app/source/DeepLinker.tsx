@@ -59,24 +59,22 @@ function pickBestContainer(el: HTMLElement): HTMLElement {
     el.closest<HTMLElement>('[data-chunk-row],[data-chunk],li,[role="row"],article,section,div') ||
     el;
 
-  // Avoid selecting the whole page
   let candidate = prefer;
   if (BAD.has(candidate.tagName)) candidate = el;
 
-  // If the candidate is practically full-screen, fall back to the leaf node
+  // If the candidate is basically full-screen, fall back to the leaf node
   const vw = typeof window !== 'undefined' ? window.innerWidth : 0;
   const vh = typeof window !== 'undefined' ? window.innerHeight : 0;
   const rect = candidate.getBoundingClientRect();
-  const tooWide = vw > 0 && rect.width > vw * 0.95;
-  const tooTall = vh > 0 && rect.height > vh * 0.9;
-  if (tooWide && tooTall) return el;
+  if (vw && vh && rect.width > vw * 0.95 && rect.height > vh * 0.9) {
+    return el;
+  }
 
   return candidate;
 }
 
 function findByText(id: string): HTMLElement | null {
   const candidates = document.querySelectorAll<HTMLElement>(
-    // favor mono/text nodes where IDs are printed, then fall back to spans/divs
     'code, kbd, pre, .font-mono, [class*="mono"], [data-field="chunk-id"], [data-role="chunk-id"], span, a, div'
   );
 
@@ -94,44 +92,43 @@ function findByText(id: string): HTMLElement | null {
 }
 
 function findTarget(id: string): HTMLElement | null {
-  // 1) attribute/id match
   const byAttr = findBySelectors(id);
   if (byAttr) return pickBestContainer(byAttr);
-  // 2) text fallback
   return findByText(id);
 }
 
-/** Highly visible but contained highlight (outline + slight bg) */
-function scrollAndHighlight(el: HTMLElement) {
+/** Bold-only effect for ~3s (no bg, no large outline) */
+function scrollAndBold(el: HTMLElement) {
   const prev = {
-    outline: el.style.outline,
-    outlineOffset: el.style.outlineOffset,
-    backgroundColor: el.style.backgroundColor,
-    transition: el.style.transition,
+    fontWeight: el.style.fontWeight,
+    textDecoration: el.style.textDecoration,
     scrollMarginTop: el.style.scrollMarginTop,
   };
 
-  // Don't get covered by any fixed header
-  el.style.scrollMarginTop = '80px';
+  // prefer scrolling the <pre> itself if present under the container
+  const pre = el.tagName !== 'PRE' ? el.querySelector<HTMLElement>('pre') : el;
+  const target = pre ?? el;
 
+  target.style.scrollMarginTop = '80px';
   try {
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
   } catch {
-    el.scrollIntoView();
+    target.scrollIntoView();
   }
 
-  el.style.transition = 'outline .2s ease, background-color .2s ease';
-  el.style.outline = '3px solid rgba(251,191,36,0.95)';      // amber outline
-  el.style.outlineOffset = '3px';
-  el.style.backgroundColor = 'rgba(251,191,36,0.10)';        // subtle fill so text remains readable
+  // make text clearly bold without altering layout too long
+  const prevFW = target.style.fontWeight;
+  target.style.fontWeight = '700';
+
+  // subtle underline to improve discoverability on dark themes
+  const prevTD = target.style.textDecoration;
+  target.style.textDecoration = 'underline';
 
   const timeout = setTimeout(() => {
-    el.style.outline = prev.outline;
-    el.style.outlineOffset = prev.outlineOffset;
-    el.style.backgroundColor = prev.backgroundColor;
-    el.style.transition = prev.transition;
-    el.style.scrollMarginTop = prev.scrollMarginTop;
-  }, 2400);
+    target.style.fontWeight = prevFW || prev.fontWeight;
+    target.style.textDecoration = prevTD || prev.textDecoration;
+    target.style.scrollMarginTop = prev.scrollMarginTop;
+  }, 3000);
 
   return () => clearTimeout(timeout);
 }
@@ -139,8 +136,8 @@ function scrollAndHighlight(el: HTMLElement) {
 /**
  * DeepLinker:
  * - Reads ?chunk= from the URL.
- * - Tries attribute selectors, then text-content fallback.
- * - Picks a tight container (pre/section page box), avoids body/main.
+ * - Finds a tight container (prefer <pre>), avoids body/main.
+ * - Bold-highlight for 3s.
  * - Retries briefly, then uses MutationObserver (up to 5s).
  */
 export default function DeepLinker() {
@@ -156,7 +153,7 @@ export default function DeepLinker() {
     const attempt = () => {
       const target = findTarget(chunk);
       if (target) {
-        cleanup = scrollAndHighlight(target);
+        cleanup = scrollAndBold(target);
         return true;
       }
       return false;
