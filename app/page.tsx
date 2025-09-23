@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 /** ---- Types tolerant to small API shape changes ---- */
 type Source = {
@@ -62,6 +62,8 @@ function normalizeAsk(raw: unknown): AskResult {
   return { answer, sources };
 }
 
+const LS_KEY_LAST_Q = 'b2ai:lastQ';
+
 export default function HomePage() {
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(false);
@@ -71,6 +73,35 @@ export default function HomePage() {
   // Toast state
   const [toast, setToast] = useState<{ msg: string; sub?: string } | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+
+  // --- 5G: auto-focus + localStorage persistence ---
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Focus input on mount
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  // Restore last query on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(LS_KEY_LAST_Q);
+      if (saved) setQ(saved);
+    } catch {
+      /* no-op */
+    }
+  }, []);
+
+  // Persist query on change
+  function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const next = e.target.value;
+    setQ(next);
+    try {
+      localStorage.setItem(LS_KEY_LAST_Q, next);
+    } catch {
+      /* no-op */
+    }
+  }
 
   async function onAsk(e: React.FormEvent) {
     e.preventDefault();
@@ -90,6 +121,13 @@ export default function HomePage() {
       const normalized = normalizeAsk(json);
       setResult(normalized);
 
+      // Keep the last asked query persisted (already happens onChange, but this ensures it's saved after submit too)
+      try {
+        localStorage.setItem(LS_KEY_LAST_Q, q);
+      } catch {
+        /* no-op */
+      }
+
       // Fire-and-forget: nudge the user that we logged their query
       // and try to pull /api/insights for a tiny stat.
       void showLoggedToast();
@@ -106,10 +144,20 @@ export default function HomePage() {
       const r = await fetch('/api/insights', { cache: 'no-store' });
       if (!r.ok) throw new Error();
       const j: unknown = await r.json();
-      const last7 =
-        isObj(j) && isObj(j['totals']) && typeof j['totals']['last_7_days'] === 'number'
-          ? (j['totals']['last_7_days'] as number)
-          : null;
+
+      // Best-effort read of last-7-days with flexible shapes
+      let last7: number | null = null;
+      if (isObj(j)) {
+        const totals = j['totals'];
+        if (isObj(totals)) {
+          if (typeof totals['last_7_days'] === 'number') last7 = totals['last_7_days'] as number;
+          else if (typeof totals['last7'] === 'number') last7 = totals['last7'] as number;
+        } else {
+          // fallback if the API flattens totals
+          if (typeof j['last_7_days'] === 'number') last7 = j['last_7_days'] as number;
+          else if (typeof j['last7'] === 'number') last7 = j['last7'] as number;
+        }
+      }
 
       setToast({
         msg: 'Query logged',
@@ -158,10 +206,11 @@ export default function HomePage() {
 
       <form onSubmit={onAsk} className="mb-4 flex items-center gap-2">
         <input
+          ref={inputRef}
           className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-400 dark:border-zinc-600 dark:bg-zinc-900"
           placeholder="e.g., What is Hopkins’ view on testing?"
           value={q}
-          onChange={(e) => setQ(e.target.value)}
+          onChange={handleChange}
         />
         <button
           type="submit"
