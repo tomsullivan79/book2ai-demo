@@ -1,134 +1,195 @@
-"use client";
+'use client';
 
-import { useState } from "react";
+import React, { useMemo, useState } from 'react';
 
-type SourceHit = {
-  id: string;
-  page: string; // e.g., "p.46–50" or "p.107"
-  text: string;
+/** ---- Types that are tolerant to small API shape changes ---- */
+type Source = {
+  id: string;           // normalized id (chunk id or path)
+  page?: number | null; // page number if present
+  score?: number | null;
+  text?: string | null;
 };
 
-type AskResponse = {
+type AskResult = {
   answer: string;
-  top: SourceHit[];
+  sources: Source[];
 };
 
-export default function Home() {
-  const [q, setQ] = useState("");
-  const [answer, setAnswer] = useState<string>("");
-  const [src, setSrc] = useState<SourceHit[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+/** ---- Small helpers (no `any`) ---- */
+function toNumber(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+function isObj(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+/** Normalize whatever /api/ask returns into AskResult */
+function normalizeAsk(raw: unknown): AskResult {
+  const root = isObj(raw) ? raw : {};
+  const answer = typeof root['answer'] === 'string' ? (root['answer'] as string) : '';
 
-  async function ask() {
+  // handle root.top (array) OR root.sources
+  const arr =
+    (Array.isArray(root['sources']) ? (root['sources'] as unknown[]) : null) ??
+    (Array.isArray(root['top']) ? (root['top'] as unknown[]) : []);
+
+  const sources: Source[] = [];
+  for (const item of arr) {
+    if (!isObj(item)) continue;
+    const id =
+      typeof item['id'] === 'string'
+        ? (item['id'] as string)
+        : typeof item['chunk_id'] === 'string'
+        ? (item['chunk_id'] as string)
+        : typeof item['path'] === 'string'
+        ? (item['path'] as string)
+        : 'unknown';
+    const page = toNumber(item['page']);
+    const score = toNumber(item['score']);
+    const text =
+      typeof item['text'] === 'string'
+        ? (item['text'] as string)
+        : typeof item['snippet'] === 'string'
+        ? (item['snippet'] as string)
+        : null;
+
+    sources.push({ id, page, score, text });
+  }
+
+  return { answer, sources };
+}
+
+export default function HomePage() {
+  const [q, setQ] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<AskResult | null>(null);
+
+  async function onAsk(e: React.FormEvent) {
+    e.preventDefault();
     if (!q.trim()) return;
     setLoading(true);
-    setErrorMsg(null);
-    setAnswer("…thinking…");
-    setSrc([]);
+    setError(null);
+    setResult(null);
     try {
-      const res = await fetch("/api/ask", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      const res = await fetch('/api/ask', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ q }),
+        cache: 'no-store',
       });
-      if (!res.ok) {
-        const errJson = (await res.json().catch(() => null)) as
-          | { detail?: string; error?: string }
-          | null;
-        const msg =
-          (errJson?.detail ?? errJson?.error) || `HTTP ${res.status}`;
-        throw new Error(msg);
-      }
-      const data = (await res.json()) as AskResponse;
-      setAnswer(data.answer || "");
-      setSrc(Array.isArray(data.top) ? data.top : []);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      setResult(normalizeAsk(json));
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Request failed";
-      setAnswer("");
-      setErrorMsg(msg);
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg || 'Failed to get answer');
     } finally {
       setLoading(false);
     }
   }
 
-  function firstPageFromSpan(span: string): number | null {
-    const m = span.match(/p\.(\d+)/);
-    if (!m) return null;
-    const n = Number(m[1]);
-    return Number.isFinite(n) ? n : null;
+  const clipboardText = useMemo(() => {
+    if (!result) return '';
+    const lines: string[] = [];
+    lines.push(result.answer.trim());
+    if (result.sources.length > 0) {
+      lines.push('');
+      lines.push('— Sources:');
+      for (const s of result.sources) {
+        const pagePart = typeof s.page === 'number' ? ` (p.${s.page})` : '';
+        lines.push(`• ${s.id}${pagePart}`);
+      }
     }
+    return lines.join('\n');
+  }, [result]);
+
+  async function copyAnswer() {
+    try {
+      await navigator.clipboard.writeText(clipboardText);
+      setCopied('Copied!');
+    } catch {
+      setCopied('Copy failed');
+    } finally {
+      setTimeout(() => setCopied(null), 1500);
+    }
+  }
+
+  const [copied, setCopied] = useState<string | null>(null);
 
   return (
-    <main className="p-6 max-w-3xl mx-auto">
-      <h1 className="text-2xl font-semibold mb-2">
-        Book2AI — Scientific Advertising (1923)
-      </h1>
-      <p className="text-sm text-gray-600 mb-4">
-        Ask questions and get page-cited answers from the uploaded source.
+    <main className="mx-auto max-w-3xl px-6 py-10 text-zinc-900 dark:text-zinc-100">
+      <h1 className="text-2xl font-semibold mb-2">Ask the Pack</h1>
+      <p className="text-sm text-zinc-600 dark:text-zinc-300 mb-6">
+        Query the <span className="font-medium">Scientific Advertising</span> pack and cite sources.
       </p>
 
-      <div className="flex gap-2 mb-4">
+      <form onSubmit={onAsk} className="mb-4 flex items-center gap-2">
         <input
-          className="flex-1 border p-2 rounded"
-          placeholder="Ask Hopkins…"
+          className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-400 dark:border-zinc-600 dark:bg-zinc-900"
+          placeholder="e.g., What is Hopkins’ view on testing?"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") ask();
-          }}
         />
         <button
-          className="border px-4 py-2 rounded disabled:opacity-60"
-          onClick={ask}
+          type="submit"
           disabled={loading}
+          className="rounded-lg border border-zinc-300 px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-600 dark:hover:bg-zinc-800"
         >
-          {loading ? "Asking…" : "Ask"}
+          {loading ? 'Asking…' : 'Ask'}
         </button>
-      </div>
+      </form>
 
-      {errorMsg ? (
-        <div className="mb-4 text-red-600 text-sm border border-red-300 bg-red-50 p-3 rounded">
-          {errorMsg}
+      {error && (
+        <div className="mb-4 rounded-md border border-red-300 bg-red-100 text-red-900 p-3 dark:border-red-700 dark:bg-red-900/40 dark:text-red-100">
+          {error}
         </div>
-      ) : null}
+      )}
 
-      <pre className="whitespace-pre-wrap border p-3 rounded mb-4 min-h-[4rem]">
-        {answer}
-      </pre>
+      {result && (
+        <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-sm font-medium">Answer</h2>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={copyAnswer}
+                disabled={!clipboardText}
+                className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-600 dark:hover:bg-zinc-800"
+              >
+                Copy Answer + Citations
+              </button>
+              {copied && <span className="text-xs text-zinc-600 dark:text-zinc-300">{copied}</span>}
+            </div>
+          </div>
 
-      <div>
-        <h2 className="font-semibold mb-2">Top sources</h2>
-        {src.length === 0 ? (
-          <p className="text-sm text-gray-600">No sources yet.</p>
-        ) : (
-          <ul className="space-y-2">
-            {src.map((s, i) => {
-              const first = firstPageFromSpan(s.page);
-              return (
-                <li key={i} className="text-sm border p-2 rounded">
-                  <b>{s.id}</b> {s.page}
-                  {first ? (
-                    <>
-                      {" "}
-                      <a
-                        href={`/source?p=${first}`}
-                        className="underline ml-2"
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Open source
-                      </a>
-                    </>
-                  ) : null}
-                  <br />
-                  {s.text.slice(0, 240)}…
+          <p className="mt-2 whitespace-pre-wrap text-sm leading-6">{result.answer}</p>
+
+          <div className="mt-4">
+            <div className="text-sm font-medium mb-1">Top Sources</div>
+            <ul className="text-sm">
+              {result.sources.map((s) => (
+                <li
+                  key={`${s.id}-${s.page ?? ''}`}
+                  className="border-t border-zinc-200 py-1 dark:border-zinc-800"
+                >
+                  <span className="font-mono">{s.id}</span>
+                  {typeof s.page === 'number' && <span className="text-zinc-600 dark:text-zinc-300"> (p.{s.page})</span>}
+                  {typeof s.score === 'number' && (
+                    <span className="ml-1 text-xs text-zinc-500">• score {s.score.toFixed(3)}</span>
+                  )}
+                  {s.text && <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300 line-clamp-3">{s.text}</div>}
                 </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
+              ))}
+              {result.sources.length === 0 && (
+                <li className="border-t border-zinc-200 py-1 text-zinc-500 dark:border-zinc-800">
+                  No sources returned
+                </li>
+              )}
+            </ul>
+          </div>
+        </section>
+      )}
     </main>
   );
 }
