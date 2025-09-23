@@ -46,9 +46,7 @@ export default function PackPage() {
       }
     }
     load();
-    return () => {
-      canceled = true;
-    };
+    return () => { canceled = true; };
   }, []);
 
   const allOk = report?.sealed === true;
@@ -103,55 +101,58 @@ export default function PackPage() {
 
   function Badge({ ok }: { ok: boolean }) {
     return ok ? (
-      <span className="inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold bg-green-100 text-green-800 border border-green-200">
+      <span className="inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold bg-green-200/80 text-green-900 border border-green-300 dark:bg-green-700/40 dark:text-green-100 dark:border-green-700">
         Sealed
       </span>
     ) : (
-      <span className="inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold bg-yellow-100 text-yellow-800 border border-yellow-200">
+      <span className="inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold bg-yellow-200/80 text-yellow-900 border border-yellow-300 dark:bg-yellow-700/40 dark:text-yellow-100 dark:border-yellow-700">
         Unsealed
       </span>
     );
   }
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-10">
+    <main className="mx-auto max-w-3xl px-6 py-10 text-zinc-900 dark:text-zinc-100">
       <h1 className="text-2xl font-semibold mb-2">Verified Pack</h1>
-      <p className="text-sm text-gray-600 mb-6">Cryptographic integrity for your content pack.</p>
+      <p className="text-sm text-zinc-600 dark:text-zinc-300 mb-6">
+        Cryptographic integrity for your content pack.
+      </p>
 
-      {loading && <div className="text-sm text-gray-500">Loading…</div>}
+      {loading && <div className="text-sm text-zinc-600 dark:text-zinc-300">Loading…</div>}
 
       {error && !loading && (
-        <div className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+        <div className="mb-4 rounded-md border border-red-300 bg-red-100 text-red-900 p-3 dark:border-red-700 dark:bg-red-900/40 dark:text-red-100">
           {error}
         </div>
       )}
 
       {!loading && report && (
         <>
-          <div className="mb-5 rounded-xl border bg-white p-4 shadow-sm">
+          <div className="mb-5 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm text-gray-500">Pack ID</div>
+                <div className="text-sm text-zinc-600 dark:text-zinc-300">Pack ID</div>
                 <div className="font-mono text-sm">{report.manifest.id}</div>
               </div>
               <Badge ok={allOk} />
             </div>
+
             <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
               {report.manifest.title && (
                 <div>
-                  <div className="text-xs text-gray-500">Title</div>
+                  <div className="text-xs text-zinc-600 dark:text-zinc-300">Title</div>
                   <div className="text-sm">{report.manifest.title}</div>
                 </div>
               )}
               {report.manifest.author && (
                 <div>
-                  <div className="text-xs text-gray-500">Author</div>
+                  <div className="text-xs text-zinc-600 dark:text-zinc-300">Author</div>
                   <div className="text-sm">{report.manifest.author}</div>
                 </div>
               )}
               {report.manifest.edition && (
                 <div>
-                  <div className="text-xs text-gray-500">Edition</div>
+                  <div className="text-xs text-zinc-600 dark:text-zinc-300">Edition</div>
                   <div className="text-sm">{report.manifest.edition}</div>
                 </div>
               )}
@@ -160,23 +161,23 @@ export default function PackPage() {
             <div className="mt-4 flex flex-wrap gap-2">
               <button
                 onClick={downloadIntegrity}
-                className="rounded-lg border px-3 py-1.5 text-sm hover:bg-gray-50"
+                className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800"
               >
                 Download integrity.json
               </button>
               <button
                 onClick={copyHashes}
-                className="rounded-lg border px-3 py-1.5 text-sm hover:bg-gray-50"
+                className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800"
               >
                 Copy hashes
               </button>
-              {copyMsg && <span className="text-xs text-gray-500">{copyMsg}</span>}
+              {copyMsg && <span className="text-xs text-zinc-600 dark:text-zinc-300">{copyMsg}</span>}
             </div>
           </div>
 
-          <div className="overflow-x-auto rounded-xl border bg-white shadow-sm">
+          <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
             <table className="min-w-full text-sm">
-              <thead className="bg-gray-50 text-left">
+              <thead className="bg-zinc-50 text-left dark:bg-zinc-800">
                 <tr>
                   <th className="px-4 py-2 font-medium">File</th>
                   <th className="px-4 py-2 font-medium">Purpose</th>
@@ -190,7 +191,7 @@ export default function PackPage() {
                 {report.files.map((f) => {
                   const showOk = Boolean(f.ok && f.expected);
                   return (
-                    <tr key={f.path} className="border-t">
+                    <tr key={f.path} className="border-t border-zinc-200 dark:border-zinc-800">
                       <td className="px-4 py-2 font-mono">{f.path}</td>
                       <td className="px-4 py-2">{f.purpose ?? '—'}</td>
                       <td className="px-4 py-2 font-mono text-xs break-all">{f.expected ?? '—'}</td>
@@ -207,7 +208,7 @@ export default function PackPage() {
           </div>
 
           {!allOk && (
-            <div className="mt-4 rounded-md border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-900">
+            <div className="mt-4 rounded-md border border-yellow-300 bg-yellow-100 p-3 text-sm text-yellow-900 dark:border-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-100">
               Tip: To seal a file, copy its <span className="font-mono">computed</span> hash into
               the <span className="font-mono">expected</span> field in{' '}
               <span className="font-mono">public/pack/manifest.json</span>, then redeploy.
