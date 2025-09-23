@@ -15,38 +15,15 @@ type KvHealthPayload = {
 };
 
 type InsightsTotals = { all_time: number; last_7_days: number };
-type SeriesPoint = { day: string; count: number };
-type TopItem = { key: string; count: number };
 
-type InsightsPayload = {
-  totals?: InsightsTotals;
-  series_7d?: SeriesPoint[];
-  top_queries?: TopItem[];
-  top_pages?: TopItem[];
-  top_chunks?: TopItem[];
-  // allow older shapes too
-  all_time?: number;
-  last_7_days?: number;
-  series?: SeriesPoint[];
-};
-
-/* ---------------- Tiny safe helpers (no `any`) ---------------- */
+/* ---------------- Tiny helpers ---------------- */
 
 type UnknownRec = Record<string, unknown>;
 function isObj(v: unknown): v is UnknownRec {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
-function toNumber(v: unknown, fallback = 0): number {
-  if (typeof v === 'number' && Number.isFinite(v)) return v;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
-}
 function pick<T extends UnknownRec, K extends string>(obj: T, key: K): unknown {
   return obj[key];
-}
-function pickObj(obj: UnknownRec, key: string): UnknownRec {
-  const v = obj[key];
-  return isObj(v) ? v : {};
 }
 
 /* ---------------- Normalizers ---------------- */
@@ -60,8 +37,6 @@ function normalizeKvHealth(raw: unknown): { health: Health; detail?: string } {
   if (ok || status.toLowerCase() === 'ok' || status.toLowerCase() === 'healthy') {
     return { health: 'ok', detail: info || 'KV reachable' };
   }
-
-  // If we got a JSON object back but not OK, call it warn (degraded)
   if (Object.keys(raw).length > 0) {
     return { health: 'warn', detail: status || info || 'KV responded with issues' };
   }
@@ -99,8 +74,7 @@ function normalizeInsightsHealth(raw: unknown): {
   return { health: 'warn', detail: 'Insights responded without totals' };
 }
 
-
-/* ---------------- UI components ---------------- */
+/* ---------------- UI ---------------- */
 
 function HealthChip({
   label,
@@ -152,7 +126,6 @@ export default function AdminPage() {
     let cancelled = false;
     (async () => {
       try {
-        // KV health
         const kvRes = await fetch('/api/kv/health', { cache: 'no-store' });
         const kvJson: unknown = kvRes.ok ? await kvRes.json() : null;
         const kvNorm = normalizeKvHealth(kvJson);
@@ -162,7 +135,6 @@ export default function AdminPage() {
       }
 
       try {
-        // Supabase health via insights
         const sbRes = await fetch('/api/insights', { cache: 'no-store' });
         const sbJson: unknown = sbRes.ok ? await sbRes.json() : null;
         const sbNorm = normalizeInsightsHealth(sbJson);
@@ -217,7 +189,6 @@ export default function AdminPage() {
         </span>
       </div>
 
-      {/* Minimal live info (non-blocking, only if insights responded) */}
       {sb.totals && (
         <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
           <div className="text-sm font-medium mb-2">Quick Totals</div>
@@ -234,7 +205,6 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* Helper links */}
       <div className="mt-6 text-sm">
         <div className="mb-2 font-medium">Shortcuts</div>
         <ul className="list-disc pl-5 space-y-1">
