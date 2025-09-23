@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
+import IntegrityBadge from '../components/IntegrityBadge';
 
 type IntegrityFile = {
   path: string;
@@ -11,7 +12,6 @@ type IntegrityFile = {
   ok?: boolean | null;
   size?: number | null;
 };
-
 type IntegrityReport = {
   manifest: {
     id: string;
@@ -60,9 +60,7 @@ export default function PackPage() {
     lines.push('');
     for (const f of report.files) {
       const status = f.expected ? (f.ok ? 'OK' : 'MISMATCH') : 'UNSEALED';
-      lines.push(
-        `${f.path}\n  computed: ${f.computed ?? '—'}\n  expected: ${f.expected ?? '—'}\n  status:   ${status}`
-      );
+      lines.push(`${f.path}\n  computed: ${f.computed ?? '—'}\n  expected: ${f.expected ?? '—'}\n  status:   ${status}`);
     }
     return lines.join('\n');
   }, [report]);
@@ -113,10 +111,11 @@ export default function PackPage() {
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-10 text-zinc-900 dark:text-zinc-100">
-      <h1 className="text-2xl font-semibold mb-2">Verified Pack</h1>
-      <p className="text-sm text-zinc-600 dark:text-zinc-300 mb-6">
-        Cryptographic integrity for your content pack.
-      </p>
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <h1 className="text-2xl font-semibold">Verified Pack</h1>
+        <IntegrityBadge />
+      </div>
+      <p className="text-sm text-zinc-600 dark:text-zinc-300 mb-6">Cryptographic integrity for your content pack.</p>
 
       {loading && <div className="text-sm text-zinc-600 dark:text-zinc-300">Loading…</div>}
 
@@ -136,7 +135,6 @@ export default function PackPage() {
               </div>
               <Badge ok={allOk} />
             </div>
-
             <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
               {report.manifest.title && (
                 <div>
@@ -159,16 +157,10 @@ export default function PackPage() {
             </div>
 
             <div className="mt-4 flex flex-wrap gap-2">
-              <button
-                onClick={downloadIntegrity}
-                className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800"
-              >
+              <button onClick={downloadIntegrity} className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800">
                 Download integrity.json
               </button>
-              <button
-                onClick={copyHashes}
-                className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800"
-              >
+              <button onClick={copyHashes} className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800">
                 Copy hashes
               </button>
               {copyMsg && <span className="text-xs text-zinc-600 dark:text-zinc-300">{copyMsg}</span>}
@@ -209,9 +201,7 @@ export default function PackPage() {
 
           {!allOk && (
             <div className="mt-4 rounded-md border border-yellow-300 bg-yellow-100 p-3 text-sm text-yellow-900 dark:border-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-100">
-              Tip: To seal a file, copy its <span className="font-mono">computed</span> hash into
-              the <span className="font-mono">expected</span> field in{' '}
-              <span className="font-mono">public/pack/manifest.json</span>, then redeploy.
+              Tip: To seal a file, copy its <span className="font-mono">computed</span> hash into the <span className="font-mono">expected</span> field in <span className="font-mono">public/pack/manifest.json</span>, then redeploy.
             </div>
           )}
         </>

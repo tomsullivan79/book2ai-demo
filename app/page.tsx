@@ -1,11 +1,12 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import IntegrityBadge from './components/IntegrityBadge';
 
 /** ---- Types tolerant to small API shape changes ---- */
 type Source = {
-  id: string;           // normalized id (chunk id or path)
-  page?: number | null; // page number if present
+  id: string;
+  page?: number | null;
   score?: number | null;
   text?: string | null;
 };
@@ -13,11 +14,7 @@ type AskResult = {
   answer: string;
   sources: Source[];
 };
-type Insights = {
-  totals: { all_time: number; last_7_days: number };
-};
 
-/** ---- Small helpers (no `any`) ---- */
 function toNumber(v: unknown): number | null {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   const n = Number(v);
@@ -26,16 +23,12 @@ function toNumber(v: unknown): number | null {
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
-/** Normalize whatever /api/ask returns into AskResult */
 function normalizeAsk(raw: unknown): AskResult {
   const root = isObj(raw) ? raw : {};
   const answer = typeof root['answer'] === 'string' ? (root['answer'] as string) : '';
-
-  // handle root.top (array) OR root.sources
   const arr =
     (Array.isArray(root['sources']) ? (root['sources'] as unknown[]) : null) ??
     (Array.isArray(root['top']) ? (root['top'] as unknown[]) : []);
-
   const sources: Source[] = [];
   for (const item of arr) {
     if (!isObj(item)) continue;
@@ -55,10 +48,8 @@ function normalizeAsk(raw: unknown): AskResult {
         : typeof item['snippet'] === 'string'
         ? (item['snippet'] as string)
         : null;
-
     sources.push({ id, page, score, text });
   }
-
   return { answer, sources };
 }
 
@@ -70,37 +61,26 @@ export default function HomePage() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AskResult | null>(null);
 
-  // Toast state
   const [toast, setToast] = useState<{ msg: string; sub?: string } | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
-  // --- 5G: auto-focus + localStorage persistence ---
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Focus input on mount
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
-
-  // Restore last query on mount
   useEffect(() => {
     try {
       const saved = localStorage.getItem(LS_KEY_LAST_Q);
       if (saved) setQ(saved);
-    } catch {
-      /* no-op */
-    }
+    } catch {}
   }, []);
-
-  // Persist query on change
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const next = e.target.value;
     setQ(next);
     try {
       localStorage.setItem(LS_KEY_LAST_Q, next);
-    } catch {
-      /* no-op */
-    }
+    } catch {}
   }
 
   async function onAsk(e: React.FormEvent) {
@@ -120,16 +100,9 @@ export default function HomePage() {
       const json: unknown = await res.json();
       const normalized = normalizeAsk(json);
       setResult(normalized);
-
-      // Keep the last asked query persisted (already happens onChange, but this ensures it's saved after submit too)
       try {
         localStorage.setItem(LS_KEY_LAST_Q, q);
-      } catch {
-        /* no-op */
-      }
-
-      // Fire-and-forget: nudge the user that we logged their query
-      // and try to pull /api/insights for a tiny stat.
+      } catch {}
       void showLoggedToast();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -144,8 +117,6 @@ export default function HomePage() {
       const r = await fetch('/api/insights', { cache: 'no-store' });
       if (!r.ok) throw new Error();
       const j: unknown = await r.json();
-
-      // Best-effort read of last-7-days with flexible shapes
       let last7: number | null = null;
       if (isObj(j)) {
         const totals = j['totals'];
@@ -153,20 +124,14 @@ export default function HomePage() {
           if (typeof totals['last_7_days'] === 'number') last7 = totals['last_7_days'] as number;
           else if (typeof totals['last7'] === 'number') last7 = totals['last7'] as number;
         } else {
-          // fallback if the API flattens totals
           if (typeof j['last_7_days'] === 'number') last7 = j['last_7_days'] as number;
           else if (typeof j['last7'] === 'number') last7 = j['last7'] as number;
         }
       }
-
-      setToast({
-        msg: 'Query logged',
-        sub: last7 !== null ? `Last 7 days: ${last7}` : undefined,
-      });
+      setToast({ msg: 'Query logged', sub: last7 !== null ? `Last 7 days: ${last7}` : undefined });
     } catch {
       setToast({ msg: 'Query logged', sub: undefined });
     } finally {
-      // Auto-dismiss after 4s
       setTimeout(() => setToast(null), 4000);
     }
   }
@@ -199,7 +164,10 @@ export default function HomePage() {
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-10 text-zinc-900 dark:text-zinc-100">
-      <h1 className="text-2xl font-semibold mb-2">Ask the Pack</h1>
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <h1 className="text-2xl font-semibold">Ask the Pack</h1>
+        <IntegrityBadge />
+      </div>
       <p className="text-sm text-zinc-600 dark:text-zinc-300 mb-6">
         Query the <span className="font-medium">Scientific Advertising</span> pack and cite sources.
       </p>
@@ -249,28 +217,17 @@ export default function HomePage() {
             <div className="text-sm font-medium mb-1">Top Sources</div>
             <ul className="text-sm">
               {result.sources.map((s) => (
-                <li
-                  key={`${s.id}-${s.page ?? ''}`}
-                  className="border-t border-zinc-200 py-1 dark:border-zinc-800"
-                >
+                <li key={`${s.id}-${s.page ?? ''}`} className="border-t border-zinc-200 py-1 dark:border-zinc-800">
                   <span className="font-mono">{s.id}</span>
-                  {typeof s.page === 'number' && (
-                    <span className="text-zinc-600 dark:text-zinc-300"> (p.{s.page})</span>
-                  )}
+                  {typeof s.page === 'number' && <span className="text-zinc-600 dark:text-zinc-300"> (p.{s.page})</span>}
                   {typeof s.score === 'number' && (
                     <span className="ml-1 text-xs text-zinc-500">• score {s.score.toFixed(3)}</span>
                   )}
-                  {s.text && (
-                    <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300 line-clamp-3">
-                      {s.text}
-                    </div>
-                  )}
+                  {s.text && <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300 line-clamp-3">{s.text}</div>}
                 </li>
               ))}
               {result.sources.length === 0 && (
-                <li className="border-t border-zinc-200 py-1 text-zinc-500 dark:border-zinc-800">
-                  No sources returned
-                </li>
+                <li className="border-t border-zinc-200 py-1 text-zinc-500 dark:border-zinc-800">No sources returned</li>
               )}
             </ul>
           </div>
@@ -278,10 +235,7 @@ export default function HomePage() {
       )}
 
       {/* Toast */}
-      <div
-        aria-live="polite"
-        className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex justify-center px-4"
-      >
+      <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex justify-center px-4">
         {toast && (
           <div className="pointer-events-auto max-w-md rounded-xl border border-zinc-300 bg-white/95 px-4 py-3 text-sm shadow-lg backdrop-blur dark:border-zinc-700 dark:bg-zinc-900/90">
             <div className="flex items-start justify-between gap-3">

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import IntegrityBadge from '../components/IntegrityBadge';
 
 type TopItem = { key: string; count: number };
 type SeriesPoint = { day: string; count: number };
@@ -12,49 +13,22 @@ type Insights = {
   top_chunks: TopItem[];
 };
 
-/* ---------- tiny runtime type guards / helpers (no `any`) ---------- */
-
 type UnknownRec = Record<string, unknown>;
-
-function isObj(v: unknown): v is UnknownRec {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-function toNumber(v: unknown, fallback = 0): number {
-  if (typeof v === 'number' && Number.isFinite(v)) return v;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
-}
-function toStringSafe(v: unknown): string {
-  return typeof v === 'string' ? v : '';
-}
-function pick(obj: UnknownRec, key: string): unknown {
-  return obj[key];
-}
-function pickObj(obj: UnknownRec, key: string): UnknownRec {
-  const v = obj[key];
-  return isObj(v) ? v : {};
-}
-function pickArr(obj: UnknownRec, key: string): unknown[] {
-  const v = obj[key];
-  return Array.isArray(v) ? v : [];
-}
-
-/* ---------- robust normalization without `any` ---------- */
+function isObj(v: unknown): v is UnknownRec { return typeof v === 'object' && v !== null && !Array.isArray(v); }
+function toNumber(v: unknown, fallback = 0): number { if (typeof v === 'number' && Number.isFinite(v)) return v; const n = Number(v); return Number.isFinite(n) ? n : fallback; }
+function toStringSafe(v: unknown): string { return typeof v === 'string' ? v : ''; }
+function pick(obj: UnknownRec, key: string): unknown { return obj[key]; }
+function pickObj(obj: UnknownRec, key: string): UnknownRec { const v = obj[key]; return isObj(v) ? v : {}; }
+function pickArr(obj: UnknownRec, key: string): unknown[] { const v = obj[key]; return Array.isArray(v) ? v : []; }
 
 function normalizeInsights(raw: unknown): Insights {
   const root: UnknownRec = isObj(raw) ? raw : {};
-
-  // Totals can be in root.totals or flat
   const totalsObj = pickObj(root, 'totals');
   const totals = {
     all_time: toNumber(pick(totalsObj, 'all_time') ?? pick(root, 'all_time')),
     last_7_days: toNumber(pick(totalsObj, 'last_7_days') ?? pick(root, 'last_7_days')),
   };
-
-  // Series: accept root.series_7d or root.series; each element should map to {day,count}
-  const seriesCandidate =
-    pickArr(root, 'series_7d').length > 0 ? pickArr(root, 'series_7d') : pickArr(root, 'series');
-
+  const seriesCandidate = pickArr(root, 'series_7d').length > 0 ? pickArr(root, 'series_7d') : pickArr(root, 'series');
   const series_7d: SeriesPoint[] = [];
   for (const item of seriesCandidate) {
     if (!isObj(item)) continue;
@@ -62,14 +36,10 @@ function normalizeInsights(raw: unknown): Insights {
     const count = toNumber(pick(item, 'count') ?? pick(item, 'value'));
     if (day) series_7d.push({ day, count });
   }
-
-  // Tops: allow either top_queries OR top.queries (same for pages/chunks)
   const topObj = pickObj(root, 'top');
-
   const tqRaw = pickArr(root, 'top_queries').length > 0 ? pickArr(root, 'top_queries') : pickArr(topObj, 'queries');
   const tpRaw = pickArr(root, 'top_pages').length > 0 ? pickArr(root, 'top_pages') : pickArr(topObj, 'pages');
   const tcRaw = pickArr(root, 'top_chunks').length > 0 ? pickArr(root, 'top_chunks') : pickArr(topObj, 'chunks');
-
   const mapTop = (arr: unknown[]): TopItem[] => {
     const out: TopItem[] = [];
     for (const item of arr) {
@@ -80,14 +50,7 @@ function normalizeInsights(raw: unknown): Insights {
     }
     return out;
   };
-
-  return {
-    totals,
-    series_7d,
-    top_queries: mapTop(tqRaw),
-    top_pages: mapTop(tpRaw),
-    top_chunks: mapTop(tcRaw),
-  };
+  return { totals, series_7d, top_queries: mapTop(tqRaw), top_pages: mapTop(tpRaw), top_chunks: mapTop(tcRaw) };
 }
 
 export default function CreatorPage() {
@@ -111,12 +74,9 @@ export default function CreatorPage() {
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
-  // Safe fallbacks so we never map over undefined
   const series = data?.series_7d ?? [];
   const topQueries = data?.top_queries ?? [];
   const topPages = data?.top_pages ?? [];
@@ -124,10 +84,11 @@ export default function CreatorPage() {
 
   return (
     <main className="mx-auto max-w-5xl px-6 py-10 text-zinc-900 dark:text-zinc-100">
-      <h1 className="text-2xl font-semibold mb-2">Creator Dashboard</h1>
-      <p className="text-sm text-zinc-600 dark:text-zinc-300 mb-6">
-        Usage insights for your Book2AI demo.
-      </p>
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <h1 className="text-2xl font-semibold">Creator Dashboard</h1>
+        <IntegrityBadge />
+      </div>
+      <p className="text-sm text-zinc-600 dark:text-zinc-300 mb-6">Usage insights for your Book2AI demo.</p>
 
       {loading && <div className="text-sm text-zinc-600 dark:text-zinc-300">Loading…</div>}
 
@@ -148,11 +109,7 @@ export default function CreatorPage() {
                 <div className="text-xs text-zinc-600 dark:text-zinc-300 mb-1">Export</div>
                 <div className="text-sm">Download recent CSV</div>
               </div>
-              <a
-                href="/api/export?days=7"
-                className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800"
-                download
-              >
+              <a href="/api/export?days=7" className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800" download>
                 Download last 7 days CSV
               </a>
             </div>
@@ -169,9 +126,7 @@ export default function CreatorPage() {
                 </li>
               ))}
               {series.length === 0 && (
-                <li className="border-t border-zinc-200 py-1 text-zinc-500 dark:border-zinc-800">
-                  No data yet
-                </li>
+                <li className="border-t border-zinc-200 py-1 text-zinc-500 dark:border-zinc-800">No data yet</li>
               )}
             </ul>
           </div>
@@ -197,15 +152,7 @@ function Card({ label, value }: { label: string; value: number }) {
   );
 }
 
-function TopTable({
-  title,
-  rows,
-  mono,
-}: {
-  title: string;
-  rows: { key: string; count: number }[] | undefined;
-  mono?: boolean;
-}) {
+function TopTable({ title, rows, mono }: { title: string; rows: { key: string; count: number }[] | undefined; mono?: boolean }) {
   const safeRows = Array.isArray(rows) ? rows : [];
   return (
     <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
@@ -226,9 +173,7 @@ function TopTable({
           ))}
           {safeRows.length === 0 && (
             <tr className="border-t border-zinc-200 dark:border-zinc-800">
-              <td className="px-3 py-2 text-zinc-500" colSpan={2}>
-                No data yet
-              </td>
+              <td className="px-3 py-2 text-zinc-500" colSpan={2}>No data yet</td>
             </tr>
           )}
         </tbody>
