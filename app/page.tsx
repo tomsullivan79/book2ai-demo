@@ -3,19 +3,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import IntegrityBadge from './components/IntegrityBadge';
 
-/** ---- Types tolerant to small API shape changes ---- */
+/** ---- Types ---- */
 type Source = {
   id: string;
   page?: number | null;
   score?: number | null;
   text?: string | null;
 };
-type AskResult = {
-  answer: string;
-  sources: Source[];
-};
+type AskResult = { answer: string; sources: Source[] };
 
-/** ---- Small helpers (no `any`) ---- */
+/** ---- Helpers ---- */
 function toNumber(v: unknown): number | null {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   const n = Number(v);
@@ -24,17 +21,12 @@ function toNumber(v: unknown): number | null {
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
-
-/** Normalize whatever /api/ask returns into AskResult */
 function normalizeAsk(raw: unknown): AskResult {
   const root = isObj(raw) ? raw : {};
   const answer = typeof root['answer'] === 'string' ? (root['answer'] as string) : '';
-
-  // handle root.top (array) OR root.sources
   const arr =
     (Array.isArray(root['sources']) ? (root['sources'] as unknown[]) : null) ??
     (Array.isArray(root['top']) ? (root['top'] as unknown[]) : []);
-
   const sources: Source[] = [];
   for (const item of arr) {
     if (!isObj(item)) continue;
@@ -54,10 +46,8 @@ function normalizeAsk(raw: unknown): AskResult {
         : typeof item['snippet'] === 'string'
         ? (item['snippet'] as string)
         : null;
-
     sources.push({ id, page, score, text });
   }
-
   return { answer, sources };
 }
 
@@ -69,56 +59,43 @@ export default function HomePage() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AskResult | null>(null);
 
-  // Toast + copy states
   const [toast, setToast] = useState<{ msg: string; sub?: string } | null>(null);
   const [copiedAnswer, setCopiedAnswer] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
 
-  // Refs
   const inputRef = useRef<HTMLInputElement>(null);
   const autoRanRef = useRef(false);
 
-  /* ---------- Focus input on mount ---------- */
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
-
-  /* ---------- Restore from localStorage (once) ---------- */
   useEffect(() => {
     try {
       const saved = localStorage.getItem(LS_KEY_LAST_Q);
       if (saved && !q) setQ(saved);
-    } catch {
-      /* no-op */
-    }
+    } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ---------- Streamed ask ---------- */
+  /** ---- Streaming ask via SSE ---- */
   const ask = useCallback(
     async (query: string, opts?: { preserveRun?: boolean }) => {
       if (!query.trim()) return;
 
       setLoading(true);
       setError(null);
-      setResult({ answer: '', sources: [] }); // start fresh
+      setResult({ answer: '', sources: [] });
 
-      // Update URL early so the page is shareable even during stream
+      // shareable URL early
       try {
-        const current = new URL(window.location.href);
-        current.searchParams.set('q', query);
-        if (!opts?.preserveRun) current.searchParams.delete('run');
-        window.history.replaceState(null, '', current.toString());
-      } catch {
-        /* no-op */
-      }
-
-      // Persist last q
+        const u = new URL(window.location.href);
+        u.searchParams.set('q', query);
+        if (!opts?.preserveRun) u.searchParams.delete('run');
+        window.history.replaceState(null, '', u.toString());
+      } catch {}
       try {
         localStorage.setItem(LS_KEY_LAST_Q, query);
-      } catch {
-        /* no-op */
-      }
+      } catch {}
 
       try {
         const res = await fetch('/api/ask/stream', {
@@ -127,8 +104,8 @@ export default function HomePage() {
           body: JSON.stringify({ q: query }),
           cache: 'no-store',
         });
+
         if (!res.body) {
-          // Fallback to non-stream if body missing
           const j = await res.json().catch(() => null);
           if (j && isObj(j) && (j['answer'] || j['sources'])) {
             const normalized = normalizeAsk(j);
@@ -143,47 +120,56 @@ export default function HomePage() {
         const decoder = new TextDecoder();
         let buffer = '';
 
+        const handleLine = (line: string) => {
+          // SSE lines are "data: {...}"
+          if (!line.startsWith('data:')) return;
+          const payload = line.slice(5).trim();
+          if (!payload) return;
+          let evt: unknown;
+          try {
+            evt = JSON.parse(payload);
+          } catch {
+            return;
+          }
+          if (!isObj(evt)) return;
+          const type = typeof evt['type'] === 'string' ? (evt['type'] as string) : '';
+
+          if (type === 'chunk') {
+            const delta = typeof evt['delta'] === 'string' ? (evt['delta'] as string) : '';
+            setResult((prev) => {
+              const cur = prev ?? { answer: '', sources: [] };
+              const merged = cur.answer.length ? cur.answer + ' ' + delta : delta;
+              return { ...cur, answer: merged };
+            });
+          } else if (type === 'done') {
+            const srcArr = Array.isArray(evt['sources']) ? (evt['sources'] as unknown[]) : [];
+            const norm = normalizeAsk({ answer: (result?.answer ?? '').trim(), sources: srcArr });
+            setResult((prev) => ({ answer: (prev?.answer ?? '').trim(), sources: norm.sources }));
+            void showLoggedToast();
+          } else if (type === 'error') {
+            const msg = typeof evt['message'] === 'string' ? (evt['message'] as string) : 'stream error';
+            setError(msg);
+          }
+        };
+
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
 
-          let idx: number;
-          while ((idx = buffer.indexOf('\n')) >= 0) {
-            const line = buffer.slice(0, idx).trim();
-            buffer = buffer.slice(idx + 1);
-            if (!line) continue;
-
-            let evt: unknown;
-            try {
-              evt = JSON.parse(line);
-            } catch {
-              continue;
-            }
-            if (!isObj(evt)) continue;
-
-            const type = typeof evt['type'] === 'string' ? (evt['type'] as string) : '';
-
-            if (type === 'meta') {
-              // could show a “streaming…” chip if desired
-            } else if (type === 'chunk') {
-              const delta = typeof evt['delta'] === 'string' ? (evt['delta'] as string) : '';
-              setResult((prev) => {
-                const cur = prev ?? { answer: '', sources: [] };
-                const merged = cur.answer.length ? cur.answer + ' ' + delta : delta;
-                return { ...cur, answer: merged };
-              });
-            } else if (type === 'done') {
-              const srcArr = Array.isArray(evt['sources']) ? (evt['sources'] as unknown[]) : [];
-              // Normalize sources once at the end
-              const norm = normalizeAsk({ answer: (result?.answer ?? '').trim(), sources: srcArr });
-              setResult((prev) => ({ answer: (prev?.answer ?? '').trim(), sources: norm.sources }));
-              // Trigger the toast and insights refresh
-              void showLoggedToast();
-            } else if (type === 'error') {
-              const msg = typeof evt['message'] === 'string' ? (evt['message'] as string) : 'stream error';
-              setError(msg);
-            }
+          // SSE frames are separated by blank lines; also handle single-line delivery
+          let sep: number;
+          while ((sep = buffer.indexOf('\n\n')) >= 0) {
+            const frame = buffer.slice(0, sep);
+            buffer = buffer.slice(sep + 2);
+            frame.split('\n').forEach((ln) => handleLine(ln.trim()));
+          }
+          // also process any trailing single line (without blank)
+          const lastNL = buffer.lastIndexOf('\n');
+          if (lastNL >= 0) {
+            const chunk = buffer.slice(0, lastNL);
+            buffer = buffer.slice(lastNL + 1);
+            chunk.split('\n').forEach((ln) => handleLine(ln.trim()));
           }
         }
       } catch (e: unknown) {
@@ -193,17 +179,16 @@ export default function HomePage() {
         setLoading(false);
       }
     },
-    [result?.answer] // only used to seed the normalize at end; safe
+    [result?.answer]
   );
 
-  /* ---------- Autorun (unchanged behavior) ---------- */
+  /** ---- Autorun (unchanged) ---- */
   useEffect(() => {
     try {
       const u = new URL(window.location.href);
       const urlQ = u.searchParams.get('q');
       const forceRun = u.searchParams.get('run') === '1';
       const saved = localStorage.getItem(LS_KEY_LAST_Q) || '';
-
       if (urlQ) {
         setQ(urlQ);
         if (!autoRanRef.current && (forceRun || !saved)) {
@@ -211,35 +196,29 @@ export default function HomePage() {
           void ask(urlQ, { preserveRun: true });
         }
       }
-    } catch {
-      /* no-op */
-    }
+    } catch {}
   }, [ask]);
 
-  /* ---------- Handlers ---------- */
+  /** ---- Handlers ---- */
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const next = e.target.value;
     setQ(next);
     try {
       localStorage.setItem(LS_KEY_LAST_Q, next);
-    } catch {
-      /* no-op */
-    }
+    } catch {}
   }
-
   function getShareUrl(forQ: string): string {
     const current = new URL(window.location.href);
     current.searchParams.set('q', forQ);
     current.searchParams.delete('run');
     return current.toString();
   }
-
   async function onAsk(e: React.FormEvent) {
     e.preventDefault();
     await ask(q, { preserveRun: false });
   }
 
-  /* ---------- Logged toast with last-7d stat ---------- */
+  /** ---- Insights toast ---- */
   async function showLoggedToast() {
     try {
       const r = await fetch('/api/insights', { cache: 'no-store' });
@@ -264,7 +243,7 @@ export default function HomePage() {
     }
   }
 
-  /* ---------- Clipboard: Answer + Citations ---------- */
+  /** ---- Clipboard ---- */
   const clipboardText = useMemo(() => {
     if (!result) return '';
     const lines: string[] = [];
@@ -290,7 +269,6 @@ export default function HomePage() {
       setTimeout(() => setCopiedAnswer(null), 1500);
     }
   }
-
   async function copyShareLink() {
     try {
       const link = getShareUrl(q);
@@ -321,7 +299,7 @@ export default function HomePage() {
           value={q}
           onChange={handleChange}
         />
-      <button
+        <button
           type="submit"
           disabled={loading}
           className="rounded-lg border border-zinc-300 px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-600 dark:hover:bg-zinc-800"
@@ -348,8 +326,18 @@ export default function HomePage() {
               >
                 Copy Answer + Citations
               </button>
+              <button
+                onClick={copyShareLink}
+                disabled={!q.trim()}
+                className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-600 dark:hover:bg-zinc-800"
+              >
+                Copy share link
+              </button>
               {copiedAnswer && (
                 <span className="text-xs text-zinc-600 dark:text-zinc-300">{copiedAnswer}</span>
+              )}
+              {copiedLink && (
+                <span className="text-xs text-zinc-600 dark:text-zinc-300">{copiedLink}</span>
               )}
             </div>
           </div>
@@ -397,18 +385,6 @@ export default function HomePage() {
           </div>
         </section>
       )}
-
-      {/* Share link row */}
-      <div className="mt-4 mb-4 flex items-center gap-2">
-        <button
-          onClick={copyShareLink}
-          disabled={!q.trim()}
-          className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-600 dark:hover:bg-zinc-800"
-        >
-          Copy share link
-        </button>
-        {copiedLink && <span className="text-xs text-zinc-600 dark:text-zinc-300">{copiedLink}</span>}
-      </div>
 
       {/* Toast */}
       <div
