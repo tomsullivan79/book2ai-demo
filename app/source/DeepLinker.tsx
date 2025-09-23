@@ -11,9 +11,8 @@ function slugify(id: string): string {
   return id.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
 }
 
-/** Minimal CSS selector escaper (no `any`, works well for IDs/data-attrs we generate) */
+/** Minimal CSS selector escaper (no `any`) */
 function cssEscape(value: string): string {
-  // Escape anything that isn't alnum, underscore, or dash
   return value.replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`);
 }
 
@@ -22,7 +21,6 @@ function buildSelectors(id: string): string[] {
   const raw = id;
   const slug = slugify(id);
   const prefixed = [`chunk-${raw}`, `chunk-${slug}`, `c-${raw}`, `c-${slug}`];
-
   const allIds = [raw, slug, ...prefixed];
 
   for (const v of allIds) {
@@ -56,19 +54,16 @@ function findByText(id: string): HTMLElement | null {
     'code, kbd, pre, .font-mono, [class*="mono"], [data-field="chunk-id"], [data-role="chunk-id"], span, a, div'
   );
 
-  let best: HTMLElement | null = null;
   const word = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const wordRe = new RegExp(`\\b${word}\\b`);
 
   for (const el of candidates) {
     const txt = (el.textContent || '').trim();
     if (!txt) continue;
-
     if (txt === id || txt.includes(id) || wordRe.test(txt)) {
-      best = el;
       const container =
         el.closest<HTMLElement>('[data-chunk-row],[data-chunk],li,[role="row"],article,section,div');
-      return container || best;
+      return container || el;
     }
   }
   return null;
@@ -78,17 +73,38 @@ function findTarget(id: string): HTMLElement | null {
   return findBySelectors(id) || findByText(id);
 }
 
+/** Highly visible highlight that can’t be clipped easily */
 function scrollAndHighlight(el: HTMLElement) {
+  // keep previous inline styles to restore later
+  const prev = {
+    boxShadow: el.style.boxShadow,
+    backgroundColor: el.style.backgroundColor,
+    transition: el.style.transition,
+    outline: el.style.outline,
+    scrollMarginTop: el.style.scrollMarginTop,
+  };
+
+  // ensure we don't sit under a fixed header
+  el.style.scrollMarginTop = '80px';
+
   try {
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   } catch {
     el.scrollIntoView();
   }
 
-  el.classList.add('ring-4', 'ring-amber-400', 'rounded-md', 'bg-amber-50', 'dark:bg-amber-900/20');
+  // strong visual flash (amber-400-ish)
+  el.style.transition = 'box-shadow .2s ease, background-color .2s ease';
+  el.style.boxShadow = '0 0 0 4px rgba(251,191,36,0.95)'; // amber 400
+  el.style.backgroundColor = 'rgba(251,191,36,0.18)';       // light fill so it pops
+  el.style.outline = 'none';
 
   const timeout = setTimeout(() => {
-    el.classList.remove('ring-4', 'ring-amber-400', 'bg-amber-50', 'dark:bg-amber-900/20');
+    el.style.boxShadow = prev.boxShadow;
+    el.style.backgroundColor = prev.backgroundColor;
+    el.style.transition = prev.transition;
+    el.style.outline = prev.outline;
+    el.style.scrollMarginTop = prev.scrollMarginTop;
   }, 2600);
 
   return () => clearTimeout(timeout);
@@ -119,14 +135,10 @@ export default function DeepLinker() {
       return false;
     };
 
-    // 1) Immediate try
-    if (attempt()) {
-      return () => {
-        if (cleanup) cleanup();
-      };
-    }
+    // 1) immediate
+    if (attempt()) return () => cleanup && cleanup();
 
-    // 2) Quick retries
+    // 2) quick retries (hydration)
     const quick = async () => {
       for (let i = 0; i < 5 && !cancelled; i++) {
         await sleep(150);
@@ -135,7 +147,7 @@ export default function DeepLinker() {
       return false;
     };
 
-    // 3) Observe up to 5s
+    // 3) observe up to 5s
     const observeUntilFound = () => {
       const deadline = Date.now() + 5000;
       const obs = new MutationObserver(() => {

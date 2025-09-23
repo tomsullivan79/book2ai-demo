@@ -331,6 +331,8 @@ export default function HomePage() {
                   <li key={`${s.id}-${s.page ?? ''}`} className="border-t border-zinc-200 py-1 dark:border-zinc-800">
                     <a
                       href={href}
+                      target="_blank"
+                      rel="noopener noreferrer"
                       className="font-mono underline underline-offset-2 hover:no-underline"
                       title="Open in Source Browser"
                     >
