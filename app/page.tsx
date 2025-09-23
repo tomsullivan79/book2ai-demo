@@ -3,16 +3,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import IntegrityBadge from './components/IntegrityBadge';
 
-/** ---- Types ---- */
-type Source = {
-  id: string;
-  page?: number | null;
-  score?: number | null;
-  text?: string | null;
-};
+type Source = { id: string; page?: number | null; score?: number | null; text?: string | null };
 type AskResult = { answer: string; sources: Source[] };
 
-/** ---- Helpers ---- */
 function toNumber(v: unknown): number | null {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   const n = Number(v);
@@ -65,6 +58,7 @@ export default function HomePage() {
 
   const inputRef = useRef<HTMLInputElement>(null);
   const autoRanRef = useRef(false);
+  const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -77,10 +71,16 @@ export default function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /** ---- Streaming ask via SSE ---- */
+  /** ---- Streaming ask via EventSource (SSE GET) ---- */
   const ask = useCallback(
     async (query: string, opts?: { preserveRun?: boolean }) => {
       if (!query.trim()) return;
+
+      // close any prior stream
+      if (esRef.current) {
+        try { esRef.current.close(); } catch {}
+        esRef.current = null;
+      }
 
       setLoading(true);
       setError(null);
@@ -97,33 +97,15 @@ export default function HomePage() {
         localStorage.setItem(LS_KEY_LAST_Q, query);
       } catch {}
 
+      // Open SSE connection
       try {
-        const res = await fetch('/api/ask/stream', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ q: query }),
-          cache: 'no-store',
-        });
+        const url = `/api/ask/stream?q=${encodeURIComponent(query)}`;
+        const es = new EventSource(url);
+        esRef.current = es;
 
-        if (!res.body) {
-          const j = await res.json().catch(() => null);
-          if (j && isObj(j) && (j['answer'] || j['sources'])) {
-            const normalized = normalizeAsk(j);
-            setResult(normalized);
-          } else {
-            throw new Error(`No stream and no JSON. HTTP ${res.status}`);
-          }
-          return;
-        }
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        const handleLine = (line: string) => {
-          // SSE lines are "data: {...}"
-          if (!line.startsWith('data:')) return;
-          const payload = line.slice(5).trim();
+        es.onmessage = (ev) => {
+          // Expect "data: {...}"
+          const payload = ev.data;
           if (!payload) return;
           let evt: unknown;
           try {
@@ -146,36 +128,25 @@ export default function HomePage() {
             const norm = normalizeAsk({ answer: (result?.answer ?? '').trim(), sources: srcArr });
             setResult((prev) => ({ answer: (prev?.answer ?? '').trim(), sources: norm.sources }));
             void showLoggedToast();
+            es.close();
+            esRef.current = null;
+            setLoading(false);
           } else if (type === 'error') {
             const msg = typeof evt['message'] === 'string' ? (evt['message'] as string) : 'stream error';
             setError(msg);
           }
         };
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-
-          // SSE frames are separated by blank lines; also handle single-line delivery
-          let sep: number;
-          while ((sep = buffer.indexOf('\n\n')) >= 0) {
-            const frame = buffer.slice(0, sep);
-            buffer = buffer.slice(sep + 2);
-            frame.split('\n').forEach((ln) => handleLine(ln.trim()));
-          }
-          // also process any trailing single line (without blank)
-          const lastNL = buffer.lastIndexOf('\n');
-          if (lastNL >= 0) {
-            const chunk = buffer.slice(0, lastNL);
-            buffer = buffer.slice(lastNL + 1);
-            chunk.split('\n').forEach((ln) => handleLine(ln.trim()));
-          }
-        }
+        es.onerror = () => {
+          // close and surface a soft error; user can retry
+          try { es.close(); } catch {}
+          esRef.current = null;
+          setLoading(false);
+          setError((prev) => prev || 'Stream error');
+        };
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         setError(msg || 'Failed to get answer');
-      } finally {
         setLoading(false);
       }
     },
@@ -203,9 +174,7 @@ export default function HomePage() {
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const next = e.target.value;
     setQ(next);
-    try {
-      localStorage.setItem(LS_KEY_LAST_Q, next);
-    } catch {}
+    try { localStorage.setItem(LS_KEY_LAST_Q, next); } catch {}
   }
   function getShareUrl(forQ: string): string {
     const current = new URL(window.location.href);
@@ -260,25 +229,14 @@ export default function HomePage() {
   }, [result]);
 
   async function copyAnswer() {
-    try {
-      await navigator.clipboard.writeText(clipboardText);
-      setCopiedAnswer('Copied!');
-    } catch {
-      setCopiedAnswer('Copy failed');
-    } finally {
-      setTimeout(() => setCopiedAnswer(null), 1500);
-    }
+    try { await navigator.clipboard.writeText(clipboardText); setCopiedAnswer('Copied!'); }
+    catch { setCopiedAnswer('Copy failed'); }
+    finally { setTimeout(() => setCopiedAnswer(null), 1500); }
   }
   async function copyShareLink() {
-    try {
-      const link = getShareUrl(q);
-      await navigator.clipboard.writeText(link);
-      setCopiedLink('Link copied!');
-    } catch {
-      setCopiedLink('Copy failed');
-    } finally {
-      setTimeout(() => setCopiedLink(null), 1500);
-    }
+    try { await navigator.clipboard.writeText(getShareUrl(q)); setCopiedLink('Link copied!'); }
+    catch { setCopiedLink('Copy failed'); }
+    finally { setTimeout(() => setCopiedLink(null), 1500); }
   }
 
   return (
@@ -333,12 +291,8 @@ export default function HomePage() {
               >
                 Copy share link
               </button>
-              {copiedAnswer && (
-                <span className="text-xs text-zinc-600 dark:text-zinc-300">{copiedAnswer}</span>
-              )}
-              {copiedLink && (
-                <span className="text-xs text-zinc-600 dark:text-zinc-300">{copiedLink}</span>
-              )}
+              {copiedAnswer && <span className="text-xs text-zinc-600 dark:text-zinc-300">{copiedAnswer}</span>}
+              {copiedLink && <span className="text-xs text-zinc-600 dark:text-zinc-300">{copiedLink}</span>}
             </div>
           </div>
 
@@ -362,17 +316,9 @@ export default function HomePage() {
                     >
                       {s.id}
                     </a>
-                    {typeof s.page === 'number' && (
-                      <span className="text-zinc-600 dark:text-zinc-300"> (p.{s.page})</span>
-                    )}
-                    {typeof s.score === 'number' && (
-                      <span className="ml-1 text-xs text-zinc-500">• score {s.score.toFixed(3)}</span>
-                    )}
-                    {s.text && (
-                      <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300 line-clamp-3">
-                        {s.text}
-                      </div>
-                    )}
+                    {typeof s.page === 'number' && <span className="text-zinc-600 dark:text-zinc-300"> (p.{s.page})</span>}
+                    {typeof s.score === 'number' && <span className="ml-1 text-xs text-zinc-500">• score {s.score.toFixed(3)}</span>}
+                    {s.text && <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300 line-clamp-3">{s.text}</div>}
                   </li>
                 );
               })}
@@ -387,10 +333,7 @@ export default function HomePage() {
       )}
 
       {/* Toast */}
-      <div
-        aria-live="polite"
-        className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex justify-center px-4"
-      >
+      <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex justify-center px-4">
         {toast && (
           <div className="pointer-events-auto max-w-md rounded-xl border border-zinc-300 bg-white/95 px-4 py-3 text-sm shadow-lg backdrop-blur dark:border-zinc-700 dark:bg-zinc-900/90">
             <div className="flex items-start justify-between gap-3">
@@ -398,10 +341,7 @@ export default function HomePage() {
                 <div className="font-medium">✅ {toast.msg}</div>
                 {toast.sub && <div className="text-xs text-zinc-600 dark:text-zinc-300">{toast.sub}</div>}
               </div>
-              <a
-                href="/creator"
-                className="rounded-lg border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800"
-              >
+              <a href="/creator" className="rounded-lg border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800">
                 Open Creator
               </a>
             </div>
