@@ -181,8 +181,23 @@ export default function AdminPage() {
     <main className="mx-auto max-w-5xl px-6 py-10 text-zinc-900 dark:text-zinc-100">
       <div className="mb-2 flex items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold">Admin</h1>
-        <IntegrityBadge />
+
+        {/* Right side: badge + logout */}
+        <div className="flex items-center gap-2">
+          <IntegrityBadge />
+          <button
+            onClick={async () => {
+              await fetch('/api/admin/logout', { method: 'POST' });
+              window.location.href = '/admin/login';
+            }}
+            className="rounded-lg border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800"
+            title="Sign out of the admin dashboard"
+          >
+            Log out
+          </button>
+        </div>
       </div>
+
       <p className="text-sm text-zinc-600 dark:text-zinc-300 mb-6">
         Real-time counters and backend health for your Book2AI demo.
       </p>
