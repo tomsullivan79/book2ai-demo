@@ -49,8 +49,34 @@ function findBySelectors(id: string): HTMLElement | null {
   return null;
 }
 
+/** pick the smallest sensible container around a text match */
+function pickBestContainer(el: HTMLElement): HTMLElement {
+  const BAD = new Set(['HTML', 'BODY', 'MAIN']);
+  const prefer =
+    el.closest<HTMLElement>('pre') ||
+    el.closest<HTMLElement>('section.border.rounded.p-3') ||
+    el.closest<HTMLElement>('section[id^="p-"]') ||
+    el.closest<HTMLElement>('[data-chunk-row],[data-chunk],li,[role="row"],article,section,div') ||
+    el;
+
+  // Avoid selecting the whole page
+  let candidate = prefer;
+  if (BAD.has(candidate.tagName)) candidate = el;
+
+  // If the candidate is practically full-screen, fall back to the leaf node
+  const vw = typeof window !== 'undefined' ? window.innerWidth : 0;
+  const vh = typeof window !== 'undefined' ? window.innerHeight : 0;
+  const rect = candidate.getBoundingClientRect();
+  const tooWide = vw > 0 && rect.width > vw * 0.95;
+  const tooTall = vh > 0 && rect.height > vh * 0.9;
+  if (tooWide && tooTall) return el;
+
+  return candidate;
+}
+
 function findByText(id: string): HTMLElement | null {
   const candidates = document.querySelectorAll<HTMLElement>(
+    // favor mono/text nodes where IDs are printed, then fall back to spans/divs
     'code, kbd, pre, .font-mono, [class*="mono"], [data-field="chunk-id"], [data-role="chunk-id"], span, a, div'
   );
 
@@ -61,30 +87,31 @@ function findByText(id: string): HTMLElement | null {
     const txt = (el.textContent || '').trim();
     if (!txt) continue;
     if (txt === id || txt.includes(id) || wordRe.test(txt)) {
-      const container =
-        el.closest<HTMLElement>('[data-chunk-row],[data-chunk],li,[role="row"],article,section,div');
-      return container || el;
+      return pickBestContainer(el);
     }
   }
   return null;
 }
 
 function findTarget(id: string): HTMLElement | null {
-  return findBySelectors(id) || findByText(id);
+  // 1) attribute/id match
+  const byAttr = findBySelectors(id);
+  if (byAttr) return pickBestContainer(byAttr);
+  // 2) text fallback
+  return findByText(id);
 }
 
-/** Highly visible highlight that can’t be clipped easily */
+/** Highly visible but contained highlight (outline + slight bg) */
 function scrollAndHighlight(el: HTMLElement) {
-  // keep previous inline styles to restore later
   const prev = {
-    boxShadow: el.style.boxShadow,
+    outline: el.style.outline,
+    outlineOffset: el.style.outlineOffset,
     backgroundColor: el.style.backgroundColor,
     transition: el.style.transition,
-    outline: el.style.outline,
     scrollMarginTop: el.style.scrollMarginTop,
   };
 
-  // ensure we don't sit under a fixed header
+  // Don't get covered by any fixed header
   el.style.scrollMarginTop = '80px';
 
   try {
@@ -93,19 +120,18 @@ function scrollAndHighlight(el: HTMLElement) {
     el.scrollIntoView();
   }
 
-  // strong visual flash (amber-400-ish)
-  el.style.transition = 'box-shadow .2s ease, background-color .2s ease';
-  el.style.boxShadow = '0 0 0 4px rgba(251,191,36,0.95)'; // amber 400
-  el.style.backgroundColor = 'rgba(251,191,36,0.18)';       // light fill so it pops
-  el.style.outline = 'none';
+  el.style.transition = 'outline .2s ease, background-color .2s ease';
+  el.style.outline = '3px solid rgba(251,191,36,0.95)';      // amber outline
+  el.style.outlineOffset = '3px';
+  el.style.backgroundColor = 'rgba(251,191,36,0.10)';        // subtle fill so text remains readable
 
   const timeout = setTimeout(() => {
-    el.style.boxShadow = prev.boxShadow;
+    el.style.outline = prev.outline;
+    el.style.outlineOffset = prev.outlineOffset;
     el.style.backgroundColor = prev.backgroundColor;
     el.style.transition = prev.transition;
-    el.style.outline = prev.outline;
     el.style.scrollMarginTop = prev.scrollMarginTop;
-  }, 2600);
+  }, 2400);
 
   return () => clearTimeout(timeout);
 }
@@ -114,6 +140,7 @@ function scrollAndHighlight(el: HTMLElement) {
  * DeepLinker:
  * - Reads ?chunk= from the URL.
  * - Tries attribute selectors, then text-content fallback.
+ * - Picks a tight container (pre/section page box), avoids body/main.
  * - Retries briefly, then uses MutationObserver (up to 5s).
  */
 export default function DeepLinker() {
