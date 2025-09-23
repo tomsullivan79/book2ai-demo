@@ -117,7 +117,6 @@ export default function HomePage() {
           const current = new URL(window.location.href);
           current.searchParams.set('q', query);
           if (!opts?.preserveRun) {
-            // On user submissions we drop &run
             current.searchParams.delete('run');
           }
           window.history.replaceState(null, '', current.toString());
@@ -176,7 +175,7 @@ export default function HomePage() {
     }
   }
 
-  /* ---------- Build share URL for current q (no &run by default) ---------- */
+  /* ---------- Build share URL (no &run by default) ---------- */
   function getShareUrl(forQ: string): string {
     const current = new URL(window.location.href);
     current.searchParams.set('q', forQ);
@@ -187,7 +186,6 @@ export default function HomePage() {
   /* ---------- Form submit ---------- */
   async function onAsk(e: React.FormEvent) {
     e.preventDefault();
-    // user action → do not preserve &run
     await ask(q, { preserveRun: false });
   }
 
@@ -294,7 +292,7 @@ export default function HomePage() {
         </button>
         {copiedLink && <span className="text-xs text-zinc-600 dark:text-zinc-300">{copiedLink}</span>}
         <span className="text-xs text-zinc-600 dark:text-zinc-400">
-          Tip: shareable URL uses <span className="font-mono">?q=</span> (add <span className="font-mono">&run=1</span> to force autorun)
+          Tip: shareable URL uses <span className="font-mono">?q=</span>
         </span>
       </div>
 
@@ -327,22 +325,31 @@ export default function HomePage() {
           <div className="mt-4">
             <div className="text-sm font-medium mb-1">Top Sources</div>
             <ul className="text-sm">
-              {result.sources.map((s) => (
-                <li key={`${s.id}-${s.page ?? ''}`} className="border-t border-zinc-200 py-1 dark:border-zinc-800">
-                  <span className="font-mono">{s.id}</span>
-                  {typeof s.page === 'number' && (
-                    <span className="text-zinc-600 dark:text-zinc-300"> (p.{s.page})</span>
-                  )}
-                  {typeof s.score === 'number' && (
-                    <span className="ml-1 text-xs text-zinc-500">• score {s.score.toFixed(3)}</span>
-                  )}
-                  {s.text && (
-                    <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300 line-clamp-3">
-                      {s.text}
-                    </div>
-                  )}
-                </li>
-              ))}
+              {result.sources.map((s) => {
+                const link = `/source?chunk=${encodeURIComponent(s.id)}`;
+                return (
+                  <li key={`${s.id}-${s.page ?? ''}`} className="border-t border-zinc-200 py-1 dark:border-zinc-800">
+                    <a
+                      href={link}
+                      className="font-mono underline underline-offset-2 hover:no-underline"
+                      title="Open in Source Browser"
+                    >
+                      {s.id}
+                    </a>
+                    {typeof s.page === 'number' && (
+                      <span className="text-zinc-600 dark:text-zinc-300"> (p.{s.page})</span>
+                    )}
+                    {typeof s.score === 'number' && (
+                      <span className="ml-1 text-xs text-zinc-500">• score {s.score.toFixed(3)}</span>
+                    )}
+                    {s.text && (
+                      <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300 line-clamp-3">
+                        {s.text}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
               {result.sources.length === 0 && (
                 <li className="border-t border-zinc-200 py-1 text-zinc-500 dark:border-zinc-800">
                   No sources returned
