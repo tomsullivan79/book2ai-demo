@@ -1,13 +1,5 @@
 import { NextResponse } from 'next/server';
-
-function getBaseUrl() {
-  // Prefer explicit base, then Vercel URL, then local dev
-  const explicit = process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/+$/, '');
-  if (explicit) return explicit;
-  const vercel = process.env.VERCEL_URL;
-  if (vercel) return `https://${vercel}`;
-  return 'http://localhost:3000';
-}
+import { headers } from 'next/headers';
 
 export async function POST() {
   const token = process.env.CRON_SECRET;
@@ -18,14 +10,33 @@ export async function POST() {
     );
   }
 
-  const base = getBaseUrl();
+  // Build absolute base from incoming request headers (reliable on Vercel)
+  const h = headers();
+  const host = h.get('x-forwarded-host') ?? h.get('host');
+  const proto = h.get('x-forwarded-proto') ?? 'https';
+  if (!host) {
+    return NextResponse.json(
+      { ok: false, error: 'Unable to resolve host from headers' },
+      { status: 500 }
+    );
+  }
+  const base = `${proto}://${host}`;
   const url = `${base}/api/cron/mirror?token=${encodeURIComponent(token)}`;
 
   try {
     const res = await fetch(url, { cache: 'no-store' });
-    const json = await res.json();
+
+    // Read raw text first so we can return useful details even on non-JSON errors
+    const raw = await res.text();
+    let data: unknown;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      data = { raw };
+    }
+
     return NextResponse.json(
-      { ok: res.ok, status: res.status, result: json },
+      { ok: res.ok, status: res.status, result: data },
       { status: res.ok ? 200 : res.status }
     );
   } catch (err) {
