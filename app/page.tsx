@@ -15,6 +15,7 @@ type AskResult = {
   sources: Source[];
 };
 
+/** ---- Small helpers (no `any`) ---- */
 function toNumber(v: unknown): number | null {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   const n = Number(v);
@@ -23,12 +24,16 @@ function toNumber(v: unknown): number | null {
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
+/** Normalize whatever /api/ask returns into AskResult */
 function normalizeAsk(raw: unknown): AskResult {
   const root = isObj(raw) ? raw : {};
   const answer = typeof root['answer'] === 'string' ? (root['answer'] as string) : '';
+
+  // handle root.top (array) OR root.sources
   const arr =
     (Array.isArray(root['sources']) ? (root['sources'] as unknown[]) : null) ??
     (Array.isArray(root['top']) ? (root['top'] as unknown[]) : []);
+
   const sources: Source[] = [];
   for (const item of arr) {
     if (!isObj(item)) continue;
@@ -48,8 +53,10 @@ function normalizeAsk(raw: unknown): AskResult {
         : typeof item['snippet'] === 'string'
         ? (item['snippet'] as string)
         : null;
+
     sources.push({ id, page, score, text });
   }
+
   return { answer, sources };
 }
 
@@ -61,31 +68,73 @@ export default function HomePage() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AskResult | null>(null);
 
+  // Toast + copy states
   const [toast, setToast] = useState<{ msg: string; sub?: string } | null>(null);
-  const [copied, setCopied] = useState<string | null>(null);
+  const [copiedAnswer, setCopiedAnswer] = useState<string | null>(null);
+  const [copiedLink, setCopiedLink] = useState<string | null>(null);
 
+  // Refs
   const inputRef = useRef<HTMLInputElement>(null);
+  const autoRanRef = useRef(false);
 
+  /* ---------- Focus input on mount ---------- */
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  /* ---------- Restore from localStorage ---------- */
   useEffect(() => {
     try {
       const saved = localStorage.getItem(LS_KEY_LAST_Q);
-      if (saved) setQ(saved);
-    } catch {}
+      if (saved && !q) setQ(saved);
+    } catch {
+      /* no-op */
+    }
+    // intentionally run once
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /* ---------- Read ?q= from URL, set input, auto-run once ---------- */
+  useEffect(() => {
+    try {
+      const u = new URL(window.location.href);
+      const urlQ = u.searchParams.get('q');
+      if (urlQ && !autoRanRef.current) {
+        setQ(urlQ);
+        // persist what we just loaded from URL
+        try {
+          localStorage.setItem(LS_KEY_LAST_Q, urlQ);
+        } catch {}
+        // auto-run once
+        autoRanRef.current = true;
+        void ask(urlQ);
+      }
+    } catch {
+      /* no-op */
+    }
+  }, []);
+
+  /* ---------- Persist query on change ---------- */
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const next = e.target.value;
     setQ(next);
     try {
       localStorage.setItem(LS_KEY_LAST_Q, next);
-    } catch {}
+    } catch {
+      /* no-op */
+    }
   }
 
-  async function onAsk(e: React.FormEvent) {
-    e.preventDefault();
-    if (!q.trim()) return;
+  /* ---------- Build share URL for current q ---------- */
+  function getShareUrl(forQ: string): string {
+    const current = new URL(window.location.href);
+    current.searchParams.set('q', forQ);
+    return current.toString();
+  }
+
+  /* ---------- Core ask (also used for autorun) ---------- */
+  async function ask(query: string) {
+    if (!query.trim()) return;
     setLoading(true);
     setError(null);
     setResult(null);
@@ -93,16 +142,30 @@ export default function HomePage() {
       const res = await fetch('/api/ask', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ q }),
+        body: JSON.stringify({ q: query }),
         cache: 'no-store',
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json: unknown = await res.json();
       const normalized = normalizeAsk(json);
       setResult(normalized);
+
+      // Update URL to ?q=... without reloading (shareable)
       try {
-        localStorage.setItem(LS_KEY_LAST_Q, q);
-      } catch {}
+        const share = getShareUrl(query);
+        window.history.replaceState(null, '', share);
+      } catch {
+        /* no-op */
+      }
+
+      // Keep last q persisted
+      try {
+        localStorage.setItem(LS_KEY_LAST_Q, query);
+      } catch {
+        /* no-op */
+      }
+
+      // Logged toast + mini-insights
       void showLoggedToast();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -112,6 +175,13 @@ export default function HomePage() {
     }
   }
 
+  /* ---------- Form submit ---------- */
+  async function onAsk(e: React.FormEvent) {
+    e.preventDefault();
+    await ask(q);
+  }
+
+  /* ---------- Logged toast with last-7d stat ---------- */
   async function showLoggedToast() {
     try {
       const r = await fetch('/api/insights', { cache: 'no-store' });
@@ -136,6 +206,7 @@ export default function HomePage() {
     }
   }
 
+  /* ---------- Clipboard: Answer + Citations ---------- */
   const clipboardText = useMemo(() => {
     if (!result) return '';
     const lines: string[] = [];
@@ -154,11 +225,24 @@ export default function HomePage() {
   async function copyAnswer() {
     try {
       await navigator.clipboard.writeText(clipboardText);
-      setCopied('Copied!');
+      setCopiedAnswer('Copied!');
     } catch {
-      setCopied('Copy failed');
+      setCopiedAnswer('Copy failed');
     } finally {
-      setTimeout(() => setCopied(null), 1500);
+      setTimeout(() => setCopiedAnswer(null), 1500);
+    }
+  }
+
+  /* ---------- Clipboard: Share link ---------- */
+  async function copyShareLink() {
+    try {
+      const link = getShareUrl(q);
+      await navigator.clipboard.writeText(link);
+      setCopiedLink('Link copied!');
+    } catch {
+      setCopiedLink('Copy failed');
+    } finally {
+      setTimeout(() => setCopiedLink(null), 1500);
     }
   }
 
@@ -172,7 +256,7 @@ export default function HomePage() {
         Query the <span className="font-medium">Scientific Advertising</span> pack and cite sources.
       </p>
 
-      <form onSubmit={onAsk} className="mb-4 flex items-center gap-2">
+      <form onSubmit={onAsk} className="mb-3 flex items-center gap-2">
         <input
           ref={inputRef}
           className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-400 dark:border-zinc-600 dark:bg-zinc-900"
@@ -188,6 +272,21 @@ export default function HomePage() {
           {loading ? 'Asking…' : 'Ask'}
         </button>
       </form>
+
+      {/* Share link row */}
+      <div className="mb-4 flex items-center gap-2">
+        <button
+          onClick={copyShareLink}
+          disabled={!q.trim()}
+          className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-600 dark:hover:bg-zinc-800"
+        >
+          Copy share link
+        </button>
+        {copiedLink && <span className="text-xs text-zinc-600 dark:text-zinc-300">{copiedLink}</span>}
+        <span className="text-xs text-zinc-600 dark:text-zinc-400">
+          Tip: shareable URL uses <span className="font-mono">?q=</span>
+        </span>
+      </div>
 
       {error && (
         <div className="mb-4 rounded-md border border-red-300 bg-red-100 text-red-900 p-3 dark:border-red-700 dark:bg-red-900/40 dark:text-red-100">
@@ -207,7 +306,9 @@ export default function HomePage() {
               >
                 Copy Answer + Citations
               </button>
-              {copied && <span className="text-xs text-zinc-600 dark:text-zinc-300">{copied}</span>}
+              {copiedAnswer && (
+                <span className="text-xs text-zinc-600 dark:text-zinc-300">{copiedAnswer}</span>
+              )}
             </div>
           </div>
 
@@ -219,15 +320,23 @@ export default function HomePage() {
               {result.sources.map((s) => (
                 <li key={`${s.id}-${s.page ?? ''}`} className="border-t border-zinc-200 py-1 dark:border-zinc-800">
                   <span className="font-mono">{s.id}</span>
-                  {typeof s.page === 'number' && <span className="text-zinc-600 dark:text-zinc-300"> (p.{s.page})</span>}
+                  {typeof s.page === 'number' && (
+                    <span className="text-zinc-600 dark:text-zinc-300"> (p.{s.page})</span>
+                  )}
                   {typeof s.score === 'number' && (
                     <span className="ml-1 text-xs text-zinc-500">• score {s.score.toFixed(3)}</span>
                   )}
-                  {s.text && <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300 line-clamp-3">{s.text}</div>}
+                  {s.text && (
+                    <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300 line-clamp-3">
+                      {s.text}
+                    </div>
+                  )}
                 </li>
               ))}
               {result.sources.length === 0 && (
-                <li className="border-t border-zinc-200 py-1 text-zinc-500 dark:border-zinc-800">No sources returned</li>
+                <li className="border-t border-zinc-200 py-1 text-zinc-500 dark:border-zinc-800">
+                  No sources returned
+                </li>
               )}
             </ul>
           </div>
@@ -235,7 +344,10 @@ export default function HomePage() {
       )}
 
       {/* Toast */}
-      <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex justify-center px-4">
+      <div
+        aria-live="polite"
+        className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex justify-center px-4"
+      >
         {toast && (
           <div className="pointer-events-auto max-w-md rounded-xl border border-zinc-300 bg-white/95 px-4 py-3 text-sm shadow-lg backdrop-blur dark:border-zinc-700 dark:bg-zinc-900/90">
             <div className="flex items-start justify-between gap-3">
