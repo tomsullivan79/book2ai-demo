@@ -20,7 +20,7 @@ function buildSelectors(id: string): string[] {
   const allIds = [raw, slug, ...prefixed];
 
   for (const v of allIds) {
-    const esc = CSS.escape(v);
+    const esc = typeof CSS !== 'undefined' && (CSS as any).escape ? (CSS as any).escape(v) : v;
     variants.add(`#${esc}`);
     variants.add(`[id="${esc}"]`);
     variants.add(`[data-chunk-id="${esc}"]`);
@@ -36,7 +36,7 @@ function buildSelectors(id: string): string[] {
   return Array.from(variants);
 }
 
-function findTarget(id: string): HTMLElement | null {
+function findBySelectors(id: string): HTMLElement | null {
   const selectors = buildSelectors(id);
   for (const sel of selectors) {
     const el = document.querySelector<HTMLElement>(sel);
@@ -45,21 +45,53 @@ function findTarget(id: string): HTMLElement | null {
   return null;
 }
 
-function scrollAndHighlight(el: HTMLElement) {
-  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  el.classList.add('ring-2', 'ring-amber-400', 'rounded-md');
+function findByText(id: string): HTMLElement | null {
+  // scan likely “mono” or code-like nodes first
+  const candidates = document.querySelectorAll<HTMLElement>(
+    'code, kbd, pre, .font-mono, [class*="mono"], [data-field="chunk-id"], [data-role="chunk-id"], span, a, div'
+  );
 
-  // If the element is a table row, add styles to the row children too for visibility
-  if (el.tagName === 'TR') {
-    el.classList.add('bg-amber-50', 'dark:bg-amber-900/20');
+  let best: HTMLElement | null = null;
+  for (const el of candidates) {
+    const txt = (el.textContent || '').trim();
+    if (!txt) continue;
+
+    // match whole id or id in parentheses / brackets / “id:” etc.
+    if (
+      txt === id ||
+      txt.includes(id) ||
+      new RegExp(`\\b${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(txt)
+    ) {
+      best = el;
+      // Prefer a container row if available
+      const container =
+        el.closest<HTMLElement>('[data-chunk-row],[data-chunk],li,[role="row"],article,section,div');
+      return container || best;
+    }
+  }
+  return null;
+}
+
+function findTarget(id: string): HTMLElement | null {
+  return findBySelectors(id) || findByText(id);
+}
+
+function scrollAndHighlight(el: HTMLElement) {
+  try {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } catch {
+    // fallback
+    el.scrollIntoView();
   }
 
+  // Apply very visible highlight
+  el.classList.add('ring-4', 'ring-amber-400', 'rounded-md');
+  // also give a subtle bg so it pops even if ring is clipped
+  el.classList.add('bg-amber-50', 'dark:bg-amber-900/20');
+
   const timeout = setTimeout(() => {
-    el.classList.remove('ring-2', 'ring-amber-400');
-    if (el.tagName === 'TR') {
-      el.classList.remove('bg-amber-50', 'dark:bg-amber-900/20');
-    }
-  }, 2200);
+    el.classList.remove('ring-4', 'ring-amber-400', 'bg-amber-50', 'dark:bg-amber-900/20');
+  }, 2600);
 
   return () => clearTimeout(timeout);
 }
@@ -67,9 +99,8 @@ function scrollAndHighlight(el: HTMLElement) {
 /**
  * DeepLinker:
  * - Reads ?chunk= from the URL.
- * - Tries multiple selector variants.
- * - If not found immediately, waits for hydration using MutationObserver (up to 5s).
- * - Also respects #fragment if your DOM already has id=… anchors (native scroll happens first).
+ * - Tries attribute selectors, then text-content fallback.
+ * - Retries briefly, then uses MutationObserver (up to 5s).
  */
 export default function DeepLinker() {
   const params = useSearchParams();
@@ -78,59 +109,53 @@ export default function DeepLinker() {
     const chunk = params.get('chunk');
     if (!chunk) return;
 
-    // Try immediate
-    let target = findTarget(chunk);
-    if (target) {
-      const cleanup = scrollAndHighlight(target);
-      return () => cleanup && cleanup();
-    }
-
-    // If not found, wait a tick (post-hydration microtask) then try again
     let cancelled = false;
     let cleanup: (() => void) | undefined;
 
-    const trySoon = async () => {
-      // quick retries before full observer
-      for (let i = 0; i < 3 && !cancelled; i++) {
-        await sleep(150);
-        target = findTarget(chunk);
-        if (target) {
-          cleanup = scrollAndHighlight(target);
-          return;
-        }
+    const attempt = () => {
+      const target = findTarget(chunk);
+      if (target) {
+        cleanup = scrollAndHighlight(target);
+        return true;
       }
-
-      // Use MutationObserver for up to 5s
-      const deadline = Date.now() + 5000;
-      const observer = new MutationObserver(() => {
-        if (Date.now() > deadline) {
-          observer.disconnect();
-          return;
-        }
-        const el = findTarget(chunk);
-        if (el) {
-          observer.disconnect();
-          cleanup = scrollAndHighlight(el);
-        }
-      });
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-      });
-
-      // Hard stop after deadline
-      const endTimer = setTimeout(() => {
-        observer.disconnect();
-      }, 5200);
-
-      // ensure timers/observers clear if unmounted
-      cleanup = (() => {
-        clearTimeout(endTimer);
-      }) as unknown as () => void;
+      return false;
     };
 
-    void trySoon();
+    // 1) Immediate try
+    if (attempt()) {
+      return () => cleanup && cleanup();
+    }
+
+    // 2) Quick retries (hydration often finishes within a few ticks)
+    const quick = async () => {
+      for (let i = 0; i < 5 && !cancelled; i++) {
+        await sleep(150);
+        if (attempt()) return true;
+      }
+      return false;
+    };
+
+    // 3) MutationObserver up to 5s
+    const observeUntilFound = () => {
+      const deadline = Date.now() + 5000;
+      const obs = new MutationObserver(() => {
+        if (Date.now() > deadline) {
+          obs.disconnect();
+          return;
+        }
+        if (attempt()) {
+          obs.disconnect();
+        }
+      });
+      obs.observe(document.body, { childList: true, subtree: true, attributes: true });
+
+      const endTimer = setTimeout(() => obs.disconnect(), 5200);
+      cleanup = (() => clearTimeout(endTimer)) as unknown as () => void;
+    };
+
+    void (async () => {
+      if (!(await quick()) && !cancelled) observeUntilFound();
+    })();
 
     return () => {
       cancelled = true;
