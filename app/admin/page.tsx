@@ -3,13 +3,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import IntegrityBadge from '../components/IntegrityBadge';
 
-/* ---------------- Types ---------------- */
-
 type Health = 'ok' | 'warn' | 'down' | 'pending';
-
 type InsightsTotals = { all_time: number; last_7_days: number };
-
-/* ---------------- Tiny helpers ---------------- */
 
 type UnknownRec = Record<string, unknown>;
 function isObj(v: unknown): v is UnknownRec {
@@ -18,8 +13,6 @@ function isObj(v: unknown): v is UnknownRec {
 function pick<T extends UnknownRec, K extends string>(obj: T, key: K): unknown {
   return obj[key];
 }
-
-/* ---------------- Normalizers ---------------- */
 
 function normalizeKvHealth(raw: unknown): { health: Health; detail?: string } {
   if (!isObj(raw)) return { health: 'down', detail: 'no payload' };
@@ -67,8 +60,6 @@ function normalizeInsightsHealth(raw: unknown): {
   return { health: 'warn', detail: 'Insights responded without totals' };
 }
 
-/* ---------------- UI ---------------- */
-
 function HealthChip({
   label,
   state,
@@ -80,8 +71,7 @@ function HealthChip({
   detail?: string;
   right?: React.ReactNode;
 }) {
-  const base =
-    'inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium';
+  const base = 'inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium';
   const cls =
     state === 'ok'
       ? 'border-green-300 bg-green-100 text-green-900 dark:border-green-700 dark:bg-green-900/30 dark:text-green-100'
@@ -91,8 +81,7 @@ function HealthChip({
       ? 'border-zinc-300 bg-zinc-100 text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-200'
       : 'border-red-300 bg-red-100 text-red-900 dark:border-red-700 dark:bg-red-900/30 dark:text-red-100';
 
-  const icon =
-    state === 'ok' ? '✅' : state === 'warn' ? '⚠️' : state === 'pending' ? '⏳' : '🛑';
+  const icon = state === 'ok' ? '✅' : state === 'warn' ? '⚠️' : state === 'pending' ? '⏳' : '🛑';
 
   return (
     <div className={`${base} ${cls}`}>
@@ -104,16 +93,16 @@ function HealthChip({
   );
 }
 
-/* ---------------- Page ---------------- */
-
 export default function AdminPage() {
-  const [kv, setKv] = useState<{ health: Health; detail?: string }>({
-    health: 'pending',
-  });
+  const [kv, setKv] = useState<{ health: Health; detail?: string }>({ health: 'pending' });
   const [sb, setSb] = useState<{ health: Health; detail?: string; totals?: InsightsTotals }>({
     health: 'pending',
   });
   const [checkedAt, setCheckedAt] = useState<string>('');
+
+  // Manual mirror state
+  const [mirroring, setMirroring] = useState(false);
+  const [mirrorMsg, setMirrorMsg] = useState<string>('');
 
   useEffect(() => {
     let cancelled = false;
@@ -155,6 +144,39 @@ export default function AdminPage() {
     []
   );
 
+  async function runMirror() {
+    setMirroring(true);
+    setMirrorMsg('');
+    try {
+      const res = await fetch('/api/admin/mirror', { method: 'POST', cache: 'no-store' });
+      const json: unknown = await res.json();
+      if (!res.ok || !isObj(json)) {
+        setMirrorMsg('Mirror failed.');
+      } else {
+        const result = isObj(json.result) ? (json.result as UnknownRec) : {};
+        const drained = String(result['drained'] ?? '0');
+        const seen = String(result['seen'] ?? '0');
+        const after = String(result['after'] ?? '0');
+        setMirrorMsg(`Mirrored: drained=${drained}, seen=${seen}, queue_after=${after}`);
+      }
+    } catch {
+      setMirrorMsg('Mirror failed (network).');
+    } finally {
+      setMirroring(false);
+      // refresh the insights chip after a short beat
+      setTimeout(async () => {
+        try {
+          const sbRes = await fetch('/api/insights', { cache: 'no-store' });
+          const sbJson: unknown = sbRes.ok ? await sbRes.json() : null;
+          const sbNorm = normalizeInsightsHealth(sbJson);
+          setSb(sbNorm);
+        } catch {
+          /* ignore */
+        }
+      }, 500);
+    }
+  }
+
   return (
     <main className="mx-auto max-w-5xl px-6 py-10 text-zinc-900 dark:text-zinc-100">
       <div className="mb-2 flex items-center justify-between gap-3">
@@ -182,22 +204,29 @@ export default function AdminPage() {
         </span>
       </div>
 
-      {sb.totals && (
-        <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-          <div className="text-sm font-medium mb-2">Quick Totals</div>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
-              <div className="text-xs text-zinc-600 dark:text-zinc-300">All-time queries</div>
-              <div className="text-xl font-semibold">{sb.totals.all_time}</div>
-            </div>
-            <div className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
-              <div className="text-xs text-zinc-600 dark:text-zinc-300">Last 7 days</div>
-              <div className="text-xl font-semibold">{sb.totals.last_7_days}</div>
+      {/* Manual mirror card */}
+      <div className="mb-6 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-sm font-medium">Mirror queue to Supabase</div>
+            <div className="text-xs text-zinc-600 dark:text-zinc-400">
+              Triggers <span className="font-mono">/api/cron/mirror</span> using your server secret.
             </div>
           </div>
+          <button
+            onClick={runMirror}
+            disabled={mirroring}
+            className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-600 dark:hover:bg-zinc-800"
+          >
+            {mirroring ? 'Mirroring…' : 'Run Mirror Now'}
+          </button>
         </div>
-      )}
+        {mirrorMsg && (
+          <div className="mt-3 text-xs text-zinc-700 dark:text-zinc-300">{mirrorMsg}</div>
+        )}
+      </div>
 
+      {/* Shortcuts */}
       <div className="mt-6 text-sm">
         <div className="mb-2 font-medium">Shortcuts</div>
         <ul className="list-disc pl-5 space-y-1">
