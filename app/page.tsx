@@ -93,51 +93,56 @@ export default function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ---------- Core ask (memoized to satisfy ESLint) ---------- */
-  const ask = useCallback(async (query: string) => {
-    if (!query.trim()) return;
-    setLoading(true);
-    setError(null);
-    setResult(null);
-    try {
-      const res = await fetch('/api/ask', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ q: query }),
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json: unknown = await res.json();
-      const normalized = normalizeAsk(json);
-      setResult(normalized);
-
-      // Update URL to ?q=... without reloading (shareable)
+  /* ---------- Core ask (memoized). opts.preserveRun keeps &run=1 if true ---------- */
+  const ask = useCallback(
+    async (query: string, opts?: { preserveRun?: boolean }) => {
+      if (!query.trim()) return;
+      setLoading(true);
+      setError(null);
+      setResult(null);
       try {
-        const current = new URL(window.location.href);
-        current.searchParams.set('q', query);
-        // retain &run=1 only if it was explicitly present; otherwise drop it
-        if (current.searchParams.get('run') !== '1') current.searchParams.delete('run');
-        window.history.replaceState(null, '', current.toString());
-      } catch {
-        /* no-op */
-      }
+        const res = await fetch('/api/ask', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ q: query }),
+          cache: 'no-store',
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json: unknown = await res.json();
+        const normalized = normalizeAsk(json);
+        setResult(normalized);
 
-      // Keep last q persisted
-      try {
-        localStorage.setItem(LS_KEY_LAST_Q, query);
-      } catch {
-        /* no-op */
-      }
+        // Update URL to ?q=... without reloading (shareable)
+        try {
+          const current = new URL(window.location.href);
+          current.searchParams.set('q', query);
+          if (!opts?.preserveRun) {
+            // On user submissions we drop &run
+            current.searchParams.delete('run');
+          }
+          window.history.replaceState(null, '', current.toString());
+        } catch {
+          /* no-op */
+        }
 
-      // Logged toast + mini-insights
-      void showLoggedToast();
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setError(msg || 'Failed to get answer');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+        // Keep last q persisted
+        try {
+          localStorage.setItem(LS_KEY_LAST_Q, query);
+        } catch {
+          /* no-op */
+        }
+
+        // Logged toast + mini-insights
+        void showLoggedToast();
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setError(msg || 'Failed to get answer');
+      } finally {
+        setLoading(false);
+      }
+    },
+    []
+  );
 
   /* ---------- Read ?q= from URL. Autorun only if: has q AND (no saved) OR ?run=1 ---------- */
   useEffect(() => {
@@ -151,7 +156,8 @@ export default function HomePage() {
         setQ(urlQ); // Always reflect URL text in the input
         if (!autoRanRef.current && (forceRun || !saved)) {
           autoRanRef.current = true;
-          void ask(urlQ);
+          // preserve &run=1 on this autorun call
+          void ask(urlQ, { preserveRun: true });
         }
       }
     } catch {
@@ -170,11 +176,10 @@ export default function HomePage() {
     }
   }
 
-  /* ---------- Build share URL for current q ---------- */
+  /* ---------- Build share URL for current q (no &run by default) ---------- */
   function getShareUrl(forQ: string): string {
     const current = new URL(window.location.href);
     current.searchParams.set('q', forQ);
-    // do not force autorun in shared links by default
     current.searchParams.delete('run');
     return current.toString();
   }
@@ -182,7 +187,8 @@ export default function HomePage() {
   /* ---------- Form submit ---------- */
   async function onAsk(e: React.FormEvent) {
     e.preventDefault();
-    await ask(q);
+    // user action → do not preserve &run
+    await ask(q, { preserveRun: false });
   }
 
   /* ---------- Logged toast with last-7d stat ---------- */
