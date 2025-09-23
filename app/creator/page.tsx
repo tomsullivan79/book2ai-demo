@@ -12,60 +12,81 @@ type Insights = {
   top_chunks: TopItem[];
 };
 
-// Robustly coerce any API payload into the Insights shape.
-function normalizeInsights(raw: unknown): Insights {
-  const r = (raw ?? {}) as any;
+/* ---------- tiny runtime type guards / helpers (no `any`) ---------- */
 
-  // Totals
+type UnknownRec = Record<string, unknown>;
+
+function isObj(v: unknown): v is UnknownRec {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+function toNumber(v: unknown, fallback = 0): number {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+function toStringSafe(v: unknown): string {
+  return typeof v === 'string' ? v : '';
+}
+function pick(obj: UnknownRec, key: string): unknown {
+  return obj[key];
+}
+function pickObj(obj: UnknownRec, key: string): UnknownRec {
+  const v = obj[key];
+  return isObj(v) ? v : {};
+}
+function pickArr(obj: UnknownRec, key: string): unknown[] {
+  const v = obj[key];
+  return Array.isArray(v) ? v : [];
+}
+
+/* ---------- robust normalization without `any` ---------- */
+
+function normalizeInsights(raw: unknown): Insights {
+  const root: UnknownRec = isObj(raw) ? raw : {};
+
+  // Totals can be in root.totals or flat
+  const totalsObj = pickObj(root, 'totals');
   const totals = {
-    all_time: Number(r?.totals?.all_time ?? r?.totals?.allTime ?? r?.all_time ?? 0),
-    last_7_days: Number(r?.totals?.last_7_days ?? r?.totals?.last7Days ?? r?.last_7_days ?? 0),
+    all_time: toNumber(pick(totalsObj, 'all_time') ?? pick(root, 'all_time')),
+    last_7_days: toNumber(pick(totalsObj, 'last_7_days') ?? pick(root, 'last_7_days')),
   };
 
-  // Series: accept r.series_7d OR r.series; map to {day,count}
-  const seriesInput: any[] = Array.isArray(r?.series_7d)
-    ? r.series_7d
-    : Array.isArray(r?.series)
-    ? r.series
-    : [];
-  const series_7d: SeriesPoint[] = seriesInput
-    .map((p: any) => ({
-      day: String(p?.day ?? p?.date ?? ''),
-      count: Number(p?.count ?? p?.value ?? 0),
-    }))
-    .filter((p: SeriesPoint) => p.day !== '');
+  // Series: accept root.series_7d or root.series; each element should map to {day,count}
+  const seriesCandidate =
+    pickArr(root, 'series_7d').length > 0 ? pickArr(root, 'series_7d') : pickArr(root, 'series');
 
-  // Tops: accept either flat keys or grouped under r.top.{queries,pages,chunks}
-  const tq: any[] = Array.isArray(r?.top_queries)
-    ? r.top_queries
-    : Array.isArray(r?.top?.queries)
-    ? r.top.queries
-    : [];
-  const tp: any[] = Array.isArray(r?.top_pages)
-    ? r.top_pages
-    : Array.isArray(r?.top?.pages)
-    ? r.top.pages
-    : [];
-  const tc: any[] = Array.isArray(r?.top_chunks)
-    ? r.top_chunks
-    : Array.isArray(r?.top?.chunks)
-    ? r.top.chunks
-    : [];
+  const series_7d: SeriesPoint[] = [];
+  for (const item of seriesCandidate) {
+    if (!isObj(item)) continue;
+    const day = toStringSafe(pick(item, 'day') ?? pick(item, 'date'));
+    const count = toNumber(pick(item, 'count') ?? pick(item, 'value'));
+    if (day) series_7d.push({ day, count });
+  }
 
-  const normTop = (arr: any[]): TopItem[] =>
-    arr
-      .map((x) => ({
-        key: String(x?.key ?? x?.id ?? x?.name ?? ''),
-        count: Number(x?.count ?? x?.value ?? 0),
-      }))
-      .filter((x) => x.key !== '');
+  // Tops: allow either top_queries OR top.queries (same for pages/chunks)
+  const topObj = pickObj(root, 'top');
+
+  const tqRaw = pickArr(root, 'top_queries').length > 0 ? pickArr(root, 'top_queries') : pickArr(topObj, 'queries');
+  const tpRaw = pickArr(root, 'top_pages').length > 0 ? pickArr(root, 'top_pages') : pickArr(topObj, 'pages');
+  const tcRaw = pickArr(root, 'top_chunks').length > 0 ? pickArr(root, 'top_chunks') : pickArr(topObj, 'chunks');
+
+  const mapTop = (arr: unknown[]): TopItem[] => {
+    const out: TopItem[] = [];
+    for (const item of arr) {
+      if (!isObj(item)) continue;
+      const key = toStringSafe(pick(item, 'key') ?? pick(item, 'id') ?? pick(item, 'name'));
+      const count = toNumber(pick(item, 'count') ?? pick(item, 'value'));
+      if (key) out.push({ key, count });
+    }
+    return out;
+  };
 
   return {
     totals,
     series_7d,
-    top_queries: normTop(tq),
-    top_pages: normTop(tp),
-    top_chunks: normTop(tc),
+    top_queries: mapTop(tqRaw),
+    top_pages: mapTop(tpRaw),
+    top_chunks: mapTop(tcRaw),
   };
 }
 
@@ -80,7 +101,7 @@ export default function CreatorPage() {
       try {
         const res = await fetch('/api/insights', { cache: 'no-store' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = await res.json();
+        const json: unknown = await res.json();
         const normalized = normalizeInsights(json);
         if (!cancelled) setData(normalized);
       } catch (e: unknown) {
