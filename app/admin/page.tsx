@@ -7,13 +7,6 @@ import IntegrityBadge from '../components/IntegrityBadge';
 
 type Health = 'ok' | 'warn' | 'down' | 'pending';
 
-type KvHealthPayload = {
-  ok?: boolean;
-  status?: string;
-  info?: string;
-  redis_url?: string;
-};
-
 type InsightsTotals = { all_time: number; last_7_days: number };
 
 /* ---------------- Tiny helpers ---------------- */
