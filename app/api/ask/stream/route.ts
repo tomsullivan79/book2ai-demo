@@ -59,8 +59,8 @@ Answer (with brief citations like [#1], [#2] where used):`;
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const userQ = (url.searchParams.get("q") ?? "").trim();
-  const packId = (body.pack ?? url.searchParams.get("pack") ?? "scientific-advertising").trim();
-
+  // ✅ FIX: read pack id from URL only (no body on GET)
+  const packId = (url.searchParams.get("pack") ?? "scientific-advertising").trim();
   const k = Math.max(3, Math.min(8, Number(url.searchParams.get("k") ?? 5)));
 
   if (!userQ) {
@@ -164,9 +164,9 @@ export async function GET(req: NextRequest) {
             encoder.encode(
               sseJson({
                 type: "done",
-                sources: top.map((t, i) => ({
-                  id: top[i].id,
-                  score: top[i].score,
+                sources: top.map((t) => ({
+                  id: t.id,
+                  score: t.score,
                 })),
               })
             )
@@ -214,7 +214,7 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// Optional POST passthrough: allow POST /api/ask/stream with JSON {q,pack}
+// Optional POST passthrough: allow POST /api/ask/stream with JSON {q,pack,k}
 export async function POST(req: NextRequest) {
   const url = new URL(req.url);
   try {
