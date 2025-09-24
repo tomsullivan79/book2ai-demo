@@ -1,5 +1,5 @@
 {
-  "id": "hopkins-scientific-advertising",
+  "id": "scientific-advertising",
   "title": "Scientific Advertising",
   "author": "Claude C. Hopkins",
   "edition": "Public Domain",
@@ -16,11 +16,16 @@
   },
   "files": [
     {
-      "path": "/pack/chunks.jsonl",
+      "path": "/packs/scientific-advertising/chunks.jsonl",
       "purpose": "chunks",
       "sha256": "654e5f9cb271eef29ed80479cebbbda7972ce36cf8adf9ed5a76613de3ee8f07"
+    },
+    {
+      "path": "/packs/scientific-advertising/embeddings.json",
+      "purpose": "embeddings",
+      "sha256": "4f7173df344e913e56a71fe7271380313f7e6e6fda18dfb85217af570554b437"
     }
   ],
   "created_at": "2025-09-22T00:00:00.000Z",
-  "manifest_digest": "a6fafd5a04ce03e612e775006de7d0a3ba24c8649260e3edacc24890c0f8f51d"
+  "manifest_digest": "sealed-v1"
 }
