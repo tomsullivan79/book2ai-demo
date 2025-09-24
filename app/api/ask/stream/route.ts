@@ -59,7 +59,8 @@ Answer (with brief citations like [#1], [#2] where used):`;
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const userQ = (url.searchParams.get("q") ?? "").trim();
-  const packId = (url.searchParams.get("pack") ?? "hopkins-scientific-advertising").trim();
+  const packId = (body.pack ?? url.searchParams.get("pack") ?? "scientific-advertising").trim();
+
   const k = Math.max(3, Math.min(8, Number(url.searchParams.get("k") ?? 5)));
 
   if (!userQ) {

@@ -66,8 +66,8 @@ export async function POST(req: NextRequest) {
     const body = (await req.json().catch(() => ({}))) as AskBody;
     const url = new URL(req.url);
     const userQ = (body.q ?? url.searchParams.get("q") ?? "").trim();
-    const packId =
-      (body.pack ?? url.searchParams.get("pack") ?? "hopkins-scientific-advertising").trim();
+    const packId = (body.pack ?? url.searchParams.get("pack") ?? "scientific-advertising").trim();
+
     const k = Math.max(3, Math.min(8, Number(body.k ?? url.searchParams.get("k") ?? 5)));
 
     if (!userQ) {

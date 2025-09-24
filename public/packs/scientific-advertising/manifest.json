@@ -1,0 +1,26 @@
+{
+  "id": "hopkins-scientific-advertising",
+  "title": "Scientific Advertising",
+  "author": "Claude C. Hopkins",
+  "edition": "Public Domain",
+  "language": "en",
+  "source": {
+    "type": "pdf",
+    "provenance": "Public Domain",
+    "notes": "Normalized text from public-domain edition"
+  },
+  "embedding": {
+    "model": "text-embedding-3-small",
+    "dim": 1536,
+    "chunk_count": 71
+  },
+  "files": [
+    {
+      "path": "/pack/chunks.jsonl",
+      "purpose": "chunks",
+      "sha256": "654e5f9cb271eef29ed80479cebbbda7972ce36cf8adf9ed5a76613de3ee8f07"
+    }
+  ],
+  "created_at": "2025-09-22T00:00:00.000Z",
+  "manifest_digest": "a6fafd5a04ce03e612e775006de7d0a3ba24c8649260e3edacc24890c0f8f51d"
+}

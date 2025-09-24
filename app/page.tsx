@@ -53,14 +53,14 @@ const LS_KEY_PACK = 'b2ai:pack';
 // Friendly label for subtitle/placeholder
 function packLabel(id: string | null | undefined): string {
   if (!id) return 'Selected Pack';
-  if (id === 'hopkins-scientific-advertising') return 'Scientific Advertising';
+  if (id === 'scientific-advertising') return 'Scientific Advertising';
   if (id === 'optimal-poker') return 'Optimal Poker';
   return id;
 }
 
 export default function HomePage() {
   const [q, setQ] = useState('');
-  const [pack, setPack] = useState<string>('hopkins-scientific-advertising'); // default; URL/LS may override
+  const [pack, setPack] = useState<string>("scientific-advertising");
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
