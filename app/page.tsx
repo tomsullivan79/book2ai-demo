@@ -50,9 +50,17 @@ function normalizeAsk(raw: unknown): AskResult {
 const LS_KEY_LAST_Q = 'b2ai:lastQ';
 const LS_KEY_PACK = 'b2ai:pack';
 
+// Friendly label for subtitle/placeholder
+function packLabel(id: string | null | undefined): string {
+  if (!id) return 'Selected Pack';
+  if (id === 'hopkins-scientific-advertising') return 'Scientific Advertising';
+  if (id === 'optimal-poker') return 'Optimal Poker';
+  return id;
+}
+
 export default function HomePage() {
   const [q, setQ] = useState('');
-  const [pack, setPack] = useState<string | null>(null);
+  const [pack, setPack] = useState<string>('hopkins-scientific-advertising'); // default; URL/LS may override
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -80,7 +88,7 @@ export default function HomePage() {
       if (urlQ && !q) setQ(urlQ);
 
       const savedPack = localStorage.getItem(LS_KEY_PACK);
-      const initPack = urlPack || savedPack;
+      const initPack = urlPack || savedPack || pack;
       if (initPack) setPack(initPack);
     } catch {
       /* no-op */
@@ -328,25 +336,42 @@ export default function HomePage() {
     }
   }
 
+  const subtitle = `Query the ${packLabel(pack)} pack and cite sources.`;
+  const placeholder =
+    pack === 'optimal-poker'
+      ? 'e.g., When should I polarize my range?'
+      : "e.g., What is Hopkins’ view on testing?";
+
   return (
     <main className="mx-auto max-w-3xl px-6 py-10 text-zinc-900 dark:text-zinc-100">
       <div className="mb-2 flex items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold">Ask the Pack</h1>
         <div className="flex items-center gap-2">
-          {/* Pack selector appears only when >1 pack exists */}
-          <PackPicker value={pack ?? ''} onChange={setPack} />
+          {/* Pack selector */}
+          <PackPicker
+            value={pack}
+            onChange={(p: string) => {
+              setPack(p);
+              // Update URL immediately for shareability
+              try {
+                const u = new URL(window.location.href);
+                u.searchParams.set('pack', p);
+                window.history.replaceState(null, '', u.toString());
+              } catch {
+                /* no-op */
+              }
+            }}
+          />
           <IntegrityBadge />
         </div>
       </div>
-      <p className="text-sm text-zinc-600 dark:text-zinc-300 mb-6">
-        Query the <span className="font-medium">Scientific Advertising</span> pack and cite sources.
-      </p>
+      <p className="text-sm text-zinc-600 dark:text-zinc-300 mb-6">{subtitle}</p>
 
       <form onSubmit={onAsk} className="mb-3 flex items-center gap-2">
         <input
           ref={inputRef}
           className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-400 dark:border-zinc-600 dark:bg-zinc-900"
-          placeholder="e.g., What is Hopkins’ view on testing?"
+          placeholder={placeholder}
           value={q}
           onChange={handleChange}
         />
@@ -444,7 +469,10 @@ export default function HomePage() {
                 <div className="font-medium">✅ {toast.msg}</div>
                 {toast.sub && <div className="text-xs text-zinc-600 dark:text-zinc-300">{toast.sub}</div>}
               </div>
-              <a href="/creator" className="rounded-lg border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800">
+              <a
+                href="/creator"
+                className="rounded-lg border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800"
+              >
                 Open Creator
               </a>
             </div>
