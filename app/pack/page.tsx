@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { Suspense, useEffect, useMemo, useState } from 'react';
 import PackPicker from '../components/PackPicker';
 import IntegrityBadge from '../components/IntegrityBadge';
 import { useSearchParams, useRouter } from 'next/navigation';
@@ -15,7 +15,17 @@ type IntegrityReport = {
   computed: Array<{ path: string; sha256: string }>;
 };
 
+// ---- Outer component ONLY adds Suspense to satisfy Next SSR rules ----
 export default function PackPage() {
+  return (
+    <Suspense fallback={<div className="mx-auto max-w-5xl px-6 py-10">Loading…</div>}>
+      <PackPageInner />
+    </Suspense>
+  );
+}
+
+// ---- Actual page contents live here ----
+function PackPageInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
@@ -30,7 +40,7 @@ export default function PackPage() {
     if (p) setPack(p);
   }, [searchParams]);
 
-  // Keep URL in sync on change
+  // Keep URL in sync on change (no scroll jump)
   useEffect(() => {
     const u = new URL(window.location.href);
     if (pack) u.searchParams.set('pack', pack);
@@ -45,7 +55,9 @@ export default function PackPage() {
       setError(null);
       setReport(null);
       try {
-        const r = await fetch(`/api/pack/integrity?pack=${encodeURIComponent(pack)}`, { cache: 'no-store' });
+        const r = await fetch(`/api/pack/integrity?pack=${encodeURIComponent(pack)}`, {
+          cache: 'no-store',
+        });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const j = (await r.json()) as IntegrityReport;
         if (!cancelled) setReport(j);
@@ -75,7 +87,7 @@ export default function PackPage() {
           <IntegrityBadge />
         </div>
       </div>
-      <p className="text-sm text-zinc-600 dark:text-zinc-300 mb-6">
+      <p className="mb-6 text-sm text-zinc-600 dark:text-zinc-300">
         Integrity report for your content pack. Select a pack to verify file hashes and manifest state.
       </p>
 
@@ -107,9 +119,7 @@ export default function PackPage() {
             <div className="text-sm">
               <div className="mb-1 font-medium">Files hashed: {report.files_hashed}</div>
               <pre className="whitespace-pre-wrap rounded-md border border-zinc-200 bg-zinc-50 p-3 text-xs dark:border-zinc-800 dark:bg-zinc-950">
-                {report.computed
-                  .map((f) => `${f.path}\n${f.sha256}`)
-                  .join('\n\n')}
+                {report.computed.map((f) => `${f.path}\n${f.sha256}`).join('\n\n')}
               </pre>
             </div>
           </div>
