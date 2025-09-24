@@ -52,7 +52,7 @@ export function listPacks(): PackMeta[] {
     try {
       const raw = JSON.parse(fs.readFileSync(legacy, 'utf8')) as PackManifest;
       out.push({
-        id: raw.id || 'hopkins-scientific-advertising',
+        id: raw.id || 'scientific-advertising',
         title: raw.title || 'Scientific Advertising',
         installed: true,
         manifestPath: legacy,

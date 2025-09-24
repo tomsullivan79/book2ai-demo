@@ -9,6 +9,23 @@ type Source = { id: string; page?: number | null; score?: number | null; text?: 
 type AskResult = { answer: string; sources: Source[] };
 
 /** ---- Helpers ---- */
+function normalizePackId(id: string | null | undefined): string {
+  const raw = (id ?? '').trim().toLowerCase();
+  if (!raw) return 'scientific-advertising';
+  if (
+    raw === 'hopkins-scientific-advertising' ||
+    raw === 'hopkins' ||
+    raw === 'scientific' ||
+    raw === 'scientific_advertising'
+  ) {
+    return 'scientific-advertising';
+  }
+  // allow current/known ids
+  if (raw === 'scientific-advertising') return 'scientific-advertising';
+  if (raw === 'optimal-poker') return 'optimal-poker';
+  return raw;
+}
+
 function toNumber(v: unknown): number | null {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   const n = Number(v);
@@ -60,7 +77,7 @@ function packLabel(id: string | null | undefined): string {
 
 export default function HomePage() {
   const [q, setQ] = useState('');
-  const [pack, setPack] = useState<string>("scientific-advertising");
+  const [pack, setPack] = useState<string>('scientific-advertising');
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -79,17 +96,29 @@ export default function HomePage() {
     inputRef.current?.focus();
   }, []);
 
-  /* Restore last q once + initial pack from URL or LS */
+  /* Restore q + normalize/seed pack from URL/LS once on mount */
   useEffect(() => {
     try {
       const u = new URL(window.location.href);
       const urlQ = u.searchParams.get('q');
-      const urlPack = u.searchParams.get('pack');
-      if (urlQ && !q) setQ(urlQ);
-
+      const urlPackRaw = u.searchParams.get('pack');
       const savedPack = localStorage.getItem(LS_KEY_PACK);
-      const initPack = urlPack || savedPack || pack;
-      if (initPack) setPack(initPack);
+
+      // Normalize initial pack
+      const initPack = normalizePackId(urlPackRaw ?? savedPack ?? 'scientific-advertising');
+      setPack(initPack);
+
+      // Ensure URL always has normalized ?pack=
+      if (initPack !== (urlPackRaw ?? '')) {
+        u.searchParams.set('pack', initPack);
+        window.history.replaceState(null, '', u.toString());
+      } else if (!urlPackRaw) {
+        u.searchParams.set('pack', initPack);
+        window.history.replaceState(null, '', u.toString());
+      }
+
+      // Seed q from URL if present
+      if (urlQ && !q) setQ(urlQ);
     } catch {
       /* no-op */
     }
