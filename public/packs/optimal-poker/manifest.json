@@ -1,0 +1,36 @@
+{
+  "id": "optimal-poker",
+  "title": "Optimal Poker",
+  "author": "—",
+  "edition": "Creator-provided",
+  "language": "en",
+  "source": {
+    "type": "docx",
+    "provenance": "Creator-provided",
+    "notes": "H1 chapter title, H3 subheads, H4 tables; images -> markdown; Q&A under 'Questions & Answers' with Q1:/A1:"
+  },
+  "embedding": {
+    "model": "text-embedding-3-small",
+    "dim": 1536,
+    "chunk_count": 0
+  },
+  "files": [
+    {
+      "path": "/packs/optimal-poker/chunks.jsonl",
+      "purpose": "chunks",
+      "sha256": "1dcde43f1696e82d0ce0199097b8f0c1799a9e2db87d662e57601af288cce397"
+    },
+    {
+      "path": "/packs/optimal-poker/qa.jsonl",
+      "purpose": "qa",
+      "sha256": "47f4a1d3b1bf45074cd89a5e2577d78231ba690b7c7ca6111ca464226bdfa219"
+    },
+    {
+      "path": "/packs/optimal-poker/embeddings.json",
+      "purpose": "embeddings",
+      "sha256": "392659b6a2d5c9a06e83ab15570401870863c2cb3271068a6a8d788fda6c3787"
+    }
+  ],
+  "created_at": "2025-09-23T00:00:00.000Z",
+  "manifest_digest": "sealed-v1"
+}
