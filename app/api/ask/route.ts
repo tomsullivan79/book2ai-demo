@@ -6,6 +6,7 @@ import {
   getChunkById,
   topKByEmbedding,
   bestQaMatch,
+  EmbeddingsFile,
 } from "@/lib/pack-runtime";
 
 export const runtime = "nodejs"; // streaming via Node fetch
@@ -14,6 +15,14 @@ type AskBody = {
   q?: string;
   pack?: string;
   k?: number;
+};
+
+type OpenAIEmbeddingResponse = {
+  data: Array<{ embedding: number[] }>;
+};
+
+type OpenAIChatStreamChunk = {
+  choices?: Array<{ delta?: { content?: string } }>;
 };
 
 async function embedQuery(q: string): Promise<number[]> {
@@ -30,8 +39,8 @@ async function embedQuery(q: string): Promise<number[]> {
     }),
   });
   if (!r.ok) throw new Error(`embed query failed: ${r.status} ${await r.text()}`);
-  const j = await r.json();
-  return j.data[0].embedding as number[];
+  const j = (await r.json()) as OpenAIEmbeddingResponse;
+  return j.data[0].embedding;
 }
 
 function buildPrompt(userQ: string, sources: { id: string; text: string }[]) {
@@ -67,7 +76,8 @@ export async function POST(req: NextRequest) {
 
     // Load pack
     const pack = await loadPack(packId);
-    if (!pack.embeddings?.ids?.length || !pack.embeddings?.vectors?.length) {
+    const emb: EmbeddingsFile | undefined = pack.embeddings;
+    if (!emb?.ids?.length || !emb?.vectors?.length) {
       return new Response("Pack has no embeddings.json", { status: 500 });
     }
 
@@ -96,11 +106,11 @@ export async function POST(req: NextRequest) {
     }
 
     // 3) RAG over pack chunks
-    const top = topKByEmbedding(qVec, pack.embeddings.ids, pack.embeddings.vectors, k);
+    const top = topKByEmbedding(qVec, emb.ids, emb.vectors, k);
     const topChunks = top
       .map((t) => getChunkById(pack, t.id))
-      .filter(Boolean)
-      .slice(0, k) as { id: string; text: string }[];
+      .filter((c): c is { id: string; text: string } => !!c)
+      .slice(0, k);
 
     const prompt = buildPrompt(userQ, topChunks);
 
@@ -127,7 +137,6 @@ export async function POST(req: NextRequest) {
       return new Response(`LLM error: ${r.status} ${await r.text()}`, { status: 500 });
     }
 
-    // Simple event-stream parser (OpenAI SSE)
     const encoder = new TextEncoder();
     const reader = r.body.getReader();
 
@@ -138,9 +147,8 @@ export async function POST(req: NextRequest) {
           controller.close();
           return;
         }
-        const chunk = new TextDecoder().decode(value);
-        // Parse "data: ..." lines
-        for (const line of chunk.split(/\r?\n/)) {
+        const text = new TextDecoder().decode(value);
+        for (const line of text.split(/\r?\n/)) {
           if (!line.startsWith("data:")) continue;
           const payload = line.slice(5).trim();
           if (payload === "[DONE]") {
@@ -148,7 +156,7 @@ export async function POST(req: NextRequest) {
             return;
           }
           try {
-            const j = JSON.parse(payload);
+            const j = JSON.parse(payload) as OpenAIChatStreamChunk;
             const delta = j.choices?.[0]?.delta?.content ?? "";
             if (delta) controller.enqueue(encoder.encode(delta));
           } catch {
@@ -164,8 +172,9 @@ export async function POST(req: NextRequest) {
     return new Response(stream, {
       headers: { "content-type": "text/plain; charset=utf-8" },
     });
-  } catch (err: any) {
-    return new Response(`Error: ${err?.message || String(err)}`, { status: 500 });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return new Response(`Error: ${msg}`, { status: 500 });
   }
 }
 
