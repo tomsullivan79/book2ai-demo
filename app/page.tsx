@@ -542,7 +542,7 @@ export default function HomePage() {
             <div className="text-sm font-medium mb-1">Top Sources</div>
             <ul className="text-sm">
               {result.sources.map((s) => {
-                const href = `/source?chunk=${encodeURIComponent(s.id)}#${encodeURIComponent(s.id)}`;
+                const href = `/source?pack=${encodeURIComponent(pack)}&chunk=${encodeURIComponent(s.id)}#${encodeURIComponent(s.id)}`;
                 const label = `${humanizeSourceTitle(s.id, pack)}${
                   typeof s.page === 'number' ? ` — p.${s.page}` : ''
                 }`;
