@@ -217,15 +217,13 @@ export default function HomePage() {
             });
           } else if (type === 'done') {
             const srcArr = Array.isArray(evt['sources']) ? (evt['sources'] as unknown[]) : [];
-            const norm = normalizeAsk({ answer: (result?.answer ?? '').trim(), sources: srcArr });
+            // We only need to normalize sources; read the latest answer from prev
+            const normalizedSources = normalizeAsk({ answer: '', sources: srcArr }).sources;
 
-            // *** NEW: sanitize final answer to remove inline ref tokens ***
-            const cleanedAnswer = stripInlineRefs((norm.answer || (result?.answer ?? '')).trim());
-
-            setResult((prev) => ({
-              answer: cleanedAnswer,
-              sources: norm.sources,
-            }));
+            setResult((prev) => {
+              const finalAnswer = stripInlineRefs((prev?.answer ?? '').trim());
+              return { answer: finalAnswer, sources: normalizedSources };
+            });
 
             void showLoggedToast();
             try { es.close(); } catch {}
