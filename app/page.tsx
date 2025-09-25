@@ -68,11 +68,10 @@ function normalizeAsk(raw: unknown): AskResult {
   return { answer, sources };
 }
 
-/** Strip inline ref tokens like [#4 id=poker.c0031] (and variants) */
+/** Strip inline ref tokens like [#4 id=poker.c0031] (do NOT touch line breaks) */
 function stripInlineRefs(s: string): string {
-  // Remove patterns like: [#4 id=foo], [#12  id=bar], possibly with spaces
-  const cleaned = s.replace(/\[\s*#\d+\s+id\s*=\s*[^|\]\s]+(?:\s*[^|\]]*)?\]/gi, '').replace(/\s{2,}/g, ' ');
-  return cleaned.trim();
+  // Remove bracketed tokens only; preserve all whitespace/newlines
+  return s.replace(/\[\s*#\d+\s+id\s*=\s*[^|\]\s]+(?:\s*[^|\]]*)?\]/gi, '');
 }
 
 const LS_KEY_LAST_Q = 'b2ai:lastQ';
@@ -217,11 +216,11 @@ export default function HomePage() {
             });
           } else if (type === 'done') {
             const srcArr = Array.isArray(evt['sources']) ? (evt['sources'] as unknown[]) : [];
-            // We only need to normalize sources; read the latest answer from prev
             const normalizedSources = normalizeAsk({ answer: '', sources: srcArr }).sources;
 
+            // Use the latest streamed text, preserve newlines, just remove inline tokens
             setResult((prev) => {
-              const finalAnswer = stripInlineRefs((prev?.answer ?? '').trim());
+              const finalAnswer = stripInlineRefs(prev?.answer ?? '');
               return { answer: finalAnswer, sources: normalizedSources };
             });
 
@@ -247,7 +246,7 @@ export default function HomePage() {
         setLoading(false);
       }
     },
-    [pack, result?.answer]
+    [pack]
   );
 
   useEffect(() => {
@@ -310,7 +309,7 @@ export default function HomePage() {
   const clipboardText = useMemo(() => {
     if (!result) return '';
     const lines: string[] = [];
-    lines.push(result.answer.trim());
+    lines.push((result.answer ?? '').trim());
     if (result.sources.length > 0) {
       lines.push('');
       lines.push('— Sources:');
