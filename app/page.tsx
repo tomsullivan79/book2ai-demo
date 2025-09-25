@@ -68,10 +68,17 @@ function normalizeAsk(raw: unknown): AskResult {
   return { answer, sources };
 }
 
+/** Strip inline ref tokens like [#4 id=poker.c0031] (and variants) */
+function stripInlineRefs(s: string): string {
+  // Remove patterns like: [#4 id=foo], [#12  id=bar], possibly with spaces
+  const cleaned = s.replace(/\[\s*#\d+\s+id\s*=\s*[^|\]\s]+(?:\s*[^|\]]*)?\]/gi, '').replace(/\s{2,}/g, ' ');
+  return cleaned.trim();
+}
+
 const LS_KEY_LAST_Q = 'b2ai:lastQ';
 const LS_KEY_PACK = 'b2ai:pack';
 
-// Friendly label for subtitle/placeholder
+// Friendly label
 function packLabel(id: string | null | undefined): string {
   if (!id) return 'Selected Pack';
   if (id === 'scientific-advertising') return 'Scientific Advertising';
@@ -95,22 +102,18 @@ export default function HomePage() {
   const autoRanRef = useRef(false);
   const esRef = useRef<EventSource | null>(null);
 
-  /* Focus input */
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
-  /* Restore q + normalize/seed pack from URL/LS once on mount */
   useEffect(() => {
     try {
       const u = new URL(window.location.href);
       const urlQ = u.searchParams.get('q');
       const urlPackRaw = u.searchParams.get('pack');
       const savedPack = localStorage.getItem(LS_KEY_PACK);
-
       const initPack = normalizePackId(urlPackRaw ?? savedPack ?? 'scientific-advertising');
       setPack(initPack);
-
       if (initPack !== (urlPackRaw ?? '')) {
         u.searchParams.set('pack', initPack);
         window.history.replaceState(null, '', u.toString());
@@ -118,15 +121,11 @@ export default function HomePage() {
         u.searchParams.set('pack', initPack);
         window.history.replaceState(null, '', u.toString());
       }
-
       if (urlQ && !q) setQ(urlQ);
-    } catch {
-      /* no-op */
-    }
+    } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* Persist pack + mirror to URL whenever it changes */
   useEffect(() => {
     if (!pack) return;
     try {
@@ -134,25 +133,17 @@ export default function HomePage() {
       const u = new URL(window.location.href);
       u.searchParams.set('pack', pack);
       window.history.replaceState(null, '', u.toString());
-    } catch {
-      /* no-op */
-    }
+    } catch {}
   }, [pack]);
 
-  /** Cancel streaming (Stop button / Esc) */
   const cancelStream = useCallback(() => {
     if (esRef.current) {
-      try {
-        esRef.current.close();
-      } catch {
-        /* no-op */
-      }
+      try { esRef.current.close(); } catch {}
       esRef.current = null;
     }
     setLoading(false);
   }, []);
 
-  /* Bind Esc to cancel while streaming */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && esRef.current) {
@@ -164,7 +155,6 @@ export default function HomePage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [cancelStream]);
 
-  /** ---- CLEAR (Item 1) ---- */
   const clearAll = useCallback(() => {
     cancelStream();
     setQ('');
@@ -178,27 +168,16 @@ export default function HomePage() {
       u.searchParams.delete('run');
       if (pack) u.searchParams.set('pack', pack);
       window.history.replaceState(null, '', u.toString());
-    } catch {
-      /* no-op */
-    }
-    try {
-      localStorage.removeItem(LS_KEY_LAST_Q);
-    } catch {
-      /* no-op */
-    }
+    } catch {}
+    try { localStorage.removeItem(LS_KEY_LAST_Q); } catch {}
   }, [cancelStream, pack]);
 
-  /** ---- Streaming ask via EventSource (SSE GET) ---- */
   const ask = useCallback(
     async (query: string, opts?: { preserveRun?: boolean }) => {
       if (!query.trim()) return;
 
       if (esRef.current) {
-        try {
-          esRef.current.close();
-        } catch {
-          /* no-op */
-        }
+        try { esRef.current.close(); } catch {}
         esRef.current = null;
       }
 
@@ -212,17 +191,10 @@ export default function HomePage() {
         if (pack) u.searchParams.set('pack', pack);
         if (!opts?.preserveRun) u.searchParams.delete('run');
         window.history.replaceState(null, '', u.toString());
-      } catch {
-        /* no-op */
-      }
-      try {
-        localStorage.setItem(LS_KEY_LAST_Q, query);
-      } catch {
-        /* no-op */
-      }
+      } catch {}
+      try { localStorage.setItem(LS_KEY_LAST_Q, query); } catch {}
 
       try {
-        // Use apiPackId for SA compatibility; middleware also normalizes
         const url = `/api/ask/stream?q=${encodeURIComponent(query)}${
           pack ? `&pack=${encodeURIComponent(apiPackId(pack))}` : ''
         }`;
@@ -233,11 +205,7 @@ export default function HomePage() {
           const payload = ev.data;
           if (!payload) return;
           let evt: unknown;
-          try {
-            evt = JSON.parse(payload);
-          } catch {
-            return;
-          }
+          try { evt = JSON.parse(payload); } catch { return; }
           if (!isObj(evt)) return;
           const type = typeof evt['type'] === 'string' ? (evt['type'] as string) : '';
 
@@ -245,19 +213,22 @@ export default function HomePage() {
             const delta = typeof evt['delta'] === 'string' ? (evt['delta'] as string) : '';
             setResult((prev) => {
               const cur = prev ?? { answer: '', sources: [] };
-              const merged = cur.answer + delta;
-              return { ...cur, answer: merged };
+              return { ...cur, answer: cur.answer + delta };
             });
           } else if (type === 'done') {
             const srcArr = Array.isArray(evt['sources']) ? (evt['sources'] as unknown[]) : [];
             const norm = normalizeAsk({ answer: (result?.answer ?? '').trim(), sources: srcArr });
-            setResult((prev) => ({ answer: (prev?.answer ?? '').trim(), sources: norm.sources }));
+
+            // *** NEW: sanitize final answer to remove inline ref tokens ***
+            const cleanedAnswer = stripInlineRefs((norm.answer || (result?.answer ?? '')).trim());
+
+            setResult((prev) => ({
+              answer: cleanedAnswer,
+              sources: norm.sources,
+            }));
+
             void showLoggedToast();
-            try {
-              es.close();
-            } catch {
-              /* no-op */
-            }
+            try { es.close(); } catch {}
             esRef.current = null;
             setLoading(false);
           } else if (type === 'error') {
@@ -267,11 +238,7 @@ export default function HomePage() {
         };
 
         es.onerror = () => {
-          try {
-            es.close();
-          } catch {
-            /* no-op */
-          }
+          try { es.close(); } catch {}
           esRef.current = null;
           setLoading(false);
           setError((prev) => prev || 'Stream error');
@@ -285,7 +252,6 @@ export default function HomePage() {
     [pack, result?.answer]
   );
 
-  /** Autorun (unchanged behavior) */
   useEffect(() => {
     try {
       const u = new URL(window.location.href);
@@ -299,20 +265,13 @@ export default function HomePage() {
           void ask(urlQ, { preserveRun: true });
         }
       }
-    } catch {
-      /* no-op */
-    }
+    } catch {}
   }, [ask]);
 
-  /** Handlers */
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const next = e.target.value;
     setQ(next);
-    try {
-      localStorage.setItem(LS_KEY_LAST_Q, next);
-    } catch {
-      /* no-op */
-    }
+    try { localStorage.setItem(LS_KEY_LAST_Q, next); } catch {}
   }
   function getShareUrl(forQ: string): string {
     const current = new URL(window.location.href);
@@ -326,7 +285,6 @@ export default function HomePage() {
     await ask(q, { preserveRun: false });
   }
 
-  /** Logged toast */
   async function showLoggedToast() {
     try {
       const r = await fetch('/api/insights', { cache: 'no-store' });
@@ -351,7 +309,6 @@ export default function HomePage() {
     }
   }
 
-  /** Clipboard text */
   const clipboardText = useMemo(() => {
     if (!result) return '';
     const lines: string[] = [];
@@ -399,12 +356,10 @@ export default function HomePage() {
       <div className="mb-2 flex items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold">Ask the Pack</h1>
         <div className="flex items-center gap-2">
-          {/* Pack selector */}
           <PackPicker
             value={pack}
             onChange={(p: string) => {
               setPack(p);
-              // Item 1: clear query/state & URL q/run on pack change, keep pack, prevent autorun
               clearAll();
               try {
                 const u = new URL(window.location.href);
@@ -412,9 +367,7 @@ export default function HomePage() {
                 u.searchParams.delete('q');
                 u.searchParams.delete('run');
                 window.history.replaceState(null, '', u.toString());
-              } catch {
-                /* no-op */
-              }
+              } catch {}
             }}
           />
           <IntegrityBadge />
@@ -447,7 +400,6 @@ export default function HomePage() {
             Stop
           </button>
         )}
-        {/* Clear button appears when there’s text */}
         {q.trim().length > 0 && (
           <button
             type="button"
@@ -515,7 +467,6 @@ export default function HomePage() {
                       {typeof s.page === 'number' && (
                         <span className="text-zinc-600 dark:text-zinc-300"> (p.{s.page})</span>
                       )}
-                      {/* 2A: score intentionally hidden */}
                     </div>
                     {s.text && (
                       <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300 line-clamp-3">
