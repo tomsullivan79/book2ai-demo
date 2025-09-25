@@ -37,19 +37,32 @@ async function getBaseUrl(): Promise<string> {
   return `${proto}://${host}`;
 }
 
-async function loadSourceText(): Promise<string> {
+function normalizePackId(id?: string | null) {
+  const v = (id ?? '').toLowerCase().trim();
+  if (!v) return 'scientific-advertising';
+  if (v === 'hopkins-scientific-advertising' || v === 'hopkins' || v === 'scientific' || v === 'scientific_advertising') {
+    return 'scientific-advertising';
+  }
+  return v === 'optimal-poker' ? 'optimal-poker' : 'scientific-advertising';
+}
+
+async function loadSourceText(packParam?: string | null): Promise<string> {
   const base = await getBaseUrl();
-  const res = await fetch(`${base}/pack/source_normalized.txt`, { cache: "force-cache" });
-  if (!res.ok) throw new Error(`Failed to fetch source text: ${res.status}`);
+  const pack = normalizePackId(packParam);
+  // NOTE: lives under /public/packs/<pack>/
+  const res = await fetch(`${base}/packs/${encodeURIComponent(pack)}/source_normalized.txt`, { cache: "force-cache" });
+  if (!res.ok) throw new Error(`Failed to fetch source text for ${pack}: ${res.status}`);
   return res.text();
 }
+
+
 
 export default async function SourcePage({
   searchParams,
 }: {
-  searchParams?: { p?: string };
+  searchParams?: { p?: string; pack?: string }; // add pack to type
 }) {
-  const raw = await loadSourceText();
+  const raw = await loadSourceText(searchParams?.pack); // pass pack through
   const pages = splitPages(raw);
 
   const targetParam = (searchParams?.p ?? "").trim();
