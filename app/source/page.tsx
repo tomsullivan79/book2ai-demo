@@ -49,11 +49,26 @@ function normalizePackId(id?: string | null) {
 async function loadSourceText(packParam?: string | null): Promise<string> {
   const base = await getBaseUrl();
   const pack = normalizePackId(packParam);
-  // NOTE: lives under /public/packs/<pack>/
-  const res = await fetch(`${base}/packs/${encodeURIComponent(pack)}/source_normalized.txt`, { cache: "force-cache" });
-  if (!res.ok) throw new Error(`Failed to fetch source text for ${pack}: ${res.status}`);
-  return res.text();
+  const root = `${base}/packs/${encodeURIComponent(pack)}`;
+
+  // Try OP file first, then SA file, then a generic fallback
+  const candidates = [
+    `${root}/source.txt`,            // Optimal Poker
+    `${root}/source_normalized.txt`, // Scientific Advertising
+    `${root}/book.txt`,
+  ];
+
+  for (const url of candidates) {
+    const res = await fetch(url, { cache: "force-cache" });
+    if (res.ok) return res.text();
+    if (res.status !== 404) {
+      throw new Error(`Failed to fetch source text for ${pack} from ${url}: ${res.status}`);
+    }
+  }
+
+  throw new Error(`No source text found for ${pack} (tried ${candidates.map(u => u.split('/').pop()).join(', ')})`);
 }
+
 
 
 
@@ -65,17 +80,25 @@ export default async function SourcePage({
   const raw = await loadSourceText(searchParams?.pack); // pass pack through
   const pages = splitPages(raw);
 
+  const packLabel =
+    normalizePackId(searchParams?.pack) === "optimal-poker"
+      ? "Optimal Poker"
+      : "Scientific Advertising";
+
   const targetParam = (searchParams?.p ?? "").trim();
+
+
   const targetPage = Number(targetParam);
   const validTarget = Number.isFinite(targetPage) && targetPage > 0;
   const hash = validTarget ? `#p-${targetPage}` : "";
 
   return (
     <main className="p-4 max-w-5xl mx-auto">
-      <h1 className="text-xl font-semibold mb-3">Scientific Advertising — Source</h1>
+      <h1 className="text-xl font-semibold mb-3">{packLabel} — Source</h1>
       <p className="text-sm mb-4">Jump to a page by number (uses [[PAGE:n]] markers).</p>
 
       <form action="/source" method="get" className="flex items-center gap-2 mb-4">
+        <input type="hidden" name="pack" value={normalizePackId(searchParams?.pack)} />
         <label htmlFor="p" className="text-sm">
           Page:
         </label>
