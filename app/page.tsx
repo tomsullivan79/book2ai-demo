@@ -70,19 +70,50 @@ function normalizeAsk(raw: unknown): AskResult {
 
 /** Strip inline ref tokens like [#4 id=poker.c0031] (do NOT touch line breaks) */
 function stripInlineRefs(s: string): string {
-  // Remove bracketed tokens only; preserve all whitespace/newlines
   return s.replace(/\[\s*#\d+\s+id\s*=\s*[^|\]\s]+(?:\s*[^|\]]*)?\]/gi, '');
 }
 
 const LS_KEY_LAST_Q = 'b2ai:lastQ';
 const LS_KEY_PACK = 'b2ai:pack';
 
-// Friendly label
+// Friendly label for pack id
 function packLabel(id: string | null | undefined): string {
   if (!id) return 'Selected Pack';
   if (id === 'scientific-advertising') return 'Scientific Advertising';
   if (id === 'optimal-poker') return 'Optimal Poker';
   return id;
+}
+
+/** --- 2B: Humanize a chunk id into a document title --- */
+const CHUNK_PREFIX_TITLES: Record<string, string> = {
+  poker: 'Optimal Poker',
+  hopkins: 'Scientific Advertising',
+  scientific: 'Scientific Advertising',
+  sa: 'Scientific Advertising',
+};
+
+function titleCaseSimple(s: string): string {
+  return s
+    .split(/[\s_-]+/g)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
+function humanizeSourceTitle(id: string, fallbackPack: string): string {
+  // 1) path-style id: ".../document-name.ext#chunk" → "Document Name"
+  if (id.includes('/')) {
+    const last = id.split('/').pop() || id;
+    const base = last.replace(/\.[a-z0-9]+$/i, '');
+    const nice = titleCaseSimple(base);
+    if (nice) return nice;
+  }
+  // 2) dotted prefix: "poker.c0031" → "Optimal Poker"
+  const prefix = id.split('.')[0];
+  if (prefix && CHUNK_PREFIX_TITLES[prefix]) return CHUNK_PREFIX_TITLES[prefix];
+
+  // 3) fallback: pack label
+  return packLabel(fallbackPack);
 }
 
 export default function HomePage() {
@@ -101,18 +132,22 @@ export default function HomePage() {
   const autoRanRef = useRef(false);
   const esRef = useRef<EventSource | null>(null);
 
+  /* Focus input */
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
+  /* Restore q + normalize/seed pack from URL/LS once on mount */
   useEffect(() => {
     try {
       const u = new URL(window.location.href);
       const urlQ = u.searchParams.get('q');
       const urlPackRaw = u.searchParams.get('pack');
       const savedPack = localStorage.getItem(LS_KEY_PACK);
+
       const initPack = normalizePackId(urlPackRaw ?? savedPack ?? 'scientific-advertising');
       setPack(initPack);
+
       if (initPack !== (urlPackRaw ?? '')) {
         u.searchParams.set('pack', initPack);
         window.history.replaceState(null, '', u.toString());
@@ -120,11 +155,15 @@ export default function HomePage() {
         u.searchParams.set('pack', initPack);
         window.history.replaceState(null, '', u.toString());
       }
+
       if (urlQ && !q) setQ(urlQ);
-    } catch {}
+    } catch {
+      /* no-op */
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /* Persist pack + mirror to URL whenever it changes */
   useEffect(() => {
     if (!pack) return;
     try {
@@ -132,17 +171,25 @@ export default function HomePage() {
       const u = new URL(window.location.href);
       u.searchParams.set('pack', pack);
       window.history.replaceState(null, '', u.toString());
-    } catch {}
+    } catch {
+      /* no-op */
+    }
   }, [pack]);
 
+  /** Cancel streaming (Stop button / Esc) */
   const cancelStream = useCallback(() => {
     if (esRef.current) {
-      try { esRef.current.close(); } catch {}
+      try {
+        esRef.current.close();
+      } catch {
+        /* no-op */
+      }
       esRef.current = null;
     }
     setLoading(false);
   }, []);
 
+  /* Bind Esc to cancel while streaming */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && esRef.current) {
@@ -154,6 +201,7 @@ export default function HomePage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [cancelStream]);
 
+  /** ---- CLEAR (Item 1) ---- */
   const clearAll = useCallback(() => {
     cancelStream();
     setQ('');
@@ -167,16 +215,27 @@ export default function HomePage() {
       u.searchParams.delete('run');
       if (pack) u.searchParams.set('pack', pack);
       window.history.replaceState(null, '', u.toString());
-    } catch {}
-    try { localStorage.removeItem(LS_KEY_LAST_Q); } catch {}
+    } catch {
+      /* no-op */
+    }
+    try {
+      localStorage.removeItem(LS_KEY_LAST_Q);
+    } catch {
+      /* no-op */
+    }
   }, [cancelStream, pack]);
 
+  /** ---- Streaming ask via EventSource (SSE GET) ---- */
   const ask = useCallback(
     async (query: string, opts?: { preserveRun?: boolean }) => {
       if (!query.trim()) return;
 
       if (esRef.current) {
-        try { esRef.current.close(); } catch {}
+        try {
+          esRef.current.close();
+        } catch {
+          /* no-op */
+        }
         esRef.current = null;
       }
 
@@ -190,10 +249,17 @@ export default function HomePage() {
         if (pack) u.searchParams.set('pack', pack);
         if (!opts?.preserveRun) u.searchParams.delete('run');
         window.history.replaceState(null, '', u.toString());
-      } catch {}
-      try { localStorage.setItem(LS_KEY_LAST_Q, query); } catch {}
+      } catch {
+        /* no-op */
+      }
+      try {
+        localStorage.setItem(LS_KEY_LAST_Q, query);
+      } catch {
+        /* no-op */
+      }
 
       try {
+        // Use apiPackId for SA compatibility; middleware also normalizes
         const url = `/api/ask/stream?q=${encodeURIComponent(query)}${
           pack ? `&pack=${encodeURIComponent(apiPackId(pack))}` : ''
         }`;
@@ -204,7 +270,11 @@ export default function HomePage() {
           const payload = ev.data;
           if (!payload) return;
           let evt: unknown;
-          try { evt = JSON.parse(payload); } catch { return; }
+          try {
+            evt = JSON.parse(payload);
+          } catch {
+            return;
+          }
           if (!isObj(evt)) return;
           const type = typeof evt['type'] === 'string' ? (evt['type'] as string) : '';
 
@@ -212,7 +282,8 @@ export default function HomePage() {
             const delta = typeof evt['delta'] === 'string' ? (evt['delta'] as string) : '';
             setResult((prev) => {
               const cur = prev ?? { answer: '', sources: [] };
-              return { ...cur, answer: cur.answer + delta };
+              const merged = cur.answer + delta;
+              return { ...cur, answer: merged };
             });
           } else if (type === 'done') {
             const srcArr = Array.isArray(evt['sources']) ? (evt['sources'] as unknown[]) : [];
@@ -225,7 +296,11 @@ export default function HomePage() {
             });
 
             void showLoggedToast();
-            try { es.close(); } catch {}
+            try {
+              es.close();
+            } catch {
+              /* no-op */
+            }
             esRef.current = null;
             setLoading(false);
           } else if (type === 'error') {
@@ -235,7 +310,11 @@ export default function HomePage() {
         };
 
         es.onerror = () => {
-          try { es.close(); } catch {}
+          try {
+            es.close();
+          } catch {
+            /* no-op */
+          }
           esRef.current = null;
           setLoading(false);
           setError((prev) => prev || 'Stream error');
@@ -249,6 +328,7 @@ export default function HomePage() {
     [pack]
   );
 
+  /** Autorun (unchanged behavior) */
   useEffect(() => {
     try {
       const u = new URL(window.location.href);
@@ -262,13 +342,20 @@ export default function HomePage() {
           void ask(urlQ, { preserveRun: true });
         }
       }
-    } catch {}
+    } catch {
+      /* no-op */
+    }
   }, [ask]);
 
+  /** Handlers */
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const next = e.target.value;
     setQ(next);
-    try { localStorage.setItem(LS_KEY_LAST_Q, next); } catch {}
+    try {
+      localStorage.setItem(LS_KEY_LAST_Q, next);
+    } catch {
+      /* no-op */
+    }
   }
   function getShareUrl(forQ: string): string {
     const current = new URL(window.location.href);
@@ -282,6 +369,7 @@ export default function HomePage() {
     await ask(q, { preserveRun: false });
   }
 
+  /** Logged toast */
   async function showLoggedToast() {
     try {
       const r = await fetch('/api/insights', { cache: 'no-store' });
@@ -306,6 +394,7 @@ export default function HomePage() {
     }
   }
 
+  /** Clipboard text */
   const clipboardText = useMemo(() => {
     if (!result) return '';
     const lines: string[] = [];
@@ -353,10 +442,12 @@ export default function HomePage() {
       <div className="mb-2 flex items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold">Ask the Pack</h1>
         <div className="flex items-center gap-2">
+          {/* Pack selector */}
           <PackPicker
             value={pack}
             onChange={(p: string) => {
               setPack(p);
+              // Item 1: clear query/state & URL q/run on pack change, keep pack, prevent autorun
               clearAll();
               try {
                 const u = new URL(window.location.href);
@@ -364,7 +455,9 @@ export default function HomePage() {
                 u.searchParams.delete('q');
                 u.searchParams.delete('run');
                 window.history.replaceState(null, '', u.toString());
-              } catch {}
+              } catch {
+                /* no-op */
+              }
             }}
           />
           <IntegrityBadge />
@@ -397,6 +490,7 @@ export default function HomePage() {
             Stop
           </button>
         )}
+        {/* Clear button appears when there’s text */}
         {q.trim().length > 0 && (
           <button
             type="button"
@@ -449,22 +543,20 @@ export default function HomePage() {
             <ul className="text-sm">
               {result.sources.map((s) => {
                 const href = `/source?chunk=${encodeURIComponent(s.id)}#${encodeURIComponent(s.id)}`;
+                const label = `${humanizeSourceTitle(s.id, pack)}${
+                  typeof s.page === 'number' ? ` — p.${s.page}` : ''
+                }`;
                 return (
                   <li key={`${s.id}-${s.page ?? ''}`} className="border-t border-zinc-200 py-2 dark:border-zinc-800">
-                    <div className="flex items-baseline gap-2">
-                      <a
-                        href={href}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="font-mono underline underline-offset-2 hover:no-underline break-all"
-                        title={`Open ${s.id} in Source Browser`}
-                      >
-                        {s.id}
-                      </a>
-                      {typeof s.page === 'number' && (
-                        <span className="text-zinc-600 dark:text-zinc-300"> (p.{s.page})</span>
-                      )}
-                    </div>
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline underline-offset-2 hover:no-underline break-all"
+                      title={s.id} // hover shows full chunk id
+                    >
+                      {label}
+                    </a>
                     {s.text && (
                       <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300 line-clamp-3">
                         {s.text}
