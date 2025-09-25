@@ -1,6 +1,6 @@
 import { NextResponse, NextRequest } from 'next/server';
 
-// Paths to protect (prefix match)
+// ===== Existing admin/creator protection =====
 const PROTECTED_PREFIXES = ['/admin', '/creator'];
 
 function isProtectedPath(pathname: string) {
@@ -12,28 +12,62 @@ function getCookie(req: NextRequest, name: string): string | null {
   return c ? c.value : null;
 }
 
+// ===== NEW: pack normalization for /api/ask/stream =====
+function normalizePackId(id: string | null): string | null {
+  if (!id) return null;
+  const raw = id.trim().toLowerCase();
+  // Map legacy SA aliases -> canonical id
+  if (
+    raw === 'hopkins-scientific-advertising' ||
+    raw === 'hopkins' ||
+    raw === 'scientific' ||
+    raw === 'scientific_advertising' ||
+    raw === 'scientificadvertising'
+  ) {
+    return 'scientific-advertising';
+  }
+  if (raw === 'scientific-advertising') return 'scientific-advertising';
+  if (raw === 'optimal-poker') return 'optimal-poker';
+  // pass-through for other ids
+  return raw;
+}
+
 export function middleware(req: NextRequest) {
-  const { pathname } = req.nextUrl;
+  const url = req.nextUrl.clone();
+  const { pathname } = url;
 
-  // Let auth page itself pass through
-  if (pathname === '/admin/login') return NextResponse.next();
+  // Let /admin/login pass through
+  if (pathname === '/admin/login') {
+    return NextResponse.next();
+  }
 
+  // Protect /admin and /creator (existing behavior)
   if (isProtectedPath(pathname)) {
     const tokenEnv = process.env.ADMIN_TOKEN || '';
     const cookieVal = getCookie(req, 'b2ai_admin');
-    // Simple constant-time-ish check
     const ok = tokenEnv.length > 0 && cookieVal === `ok:${tokenEnv}`;
     if (!ok) {
-      const url = req.nextUrl.clone();
-      url.pathname = '/admin/login';
-      url.searchParams.set('next', pathname);
-      return NextResponse.redirect(url);
+      const redirectUrl = req.nextUrl.clone();
+      redirectUrl.pathname = '/admin/login';
+      redirectUrl.searchParams.set('next', pathname);
+      return NextResponse.redirect(redirectUrl);
+    }
+  }
+
+  // Normalize legacy pack ids for streaming endpoint only
+  if (pathname.startsWith('/api/ask/stream')) {
+    const current = url.searchParams.get('pack');
+    const normalized = normalizePackId(current);
+    if (normalized && normalized !== current) {
+      url.searchParams.set('pack', normalized);
+      return NextResponse.rewrite(url);
     }
   }
 
   return NextResponse.next();
 }
 
+// Expand matcher to include the streaming route (minimal scope)
 export const config = {
-  matcher: ['/admin/:path*', '/creator/:path*'],
+  matcher: ['/admin/:path*', '/creator/:path*', '/api/ask/stream'],
 };
