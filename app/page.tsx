@@ -20,10 +20,14 @@ function normalizePackId(id: string | null | undefined): string {
   ) {
     return 'scientific-advertising';
   }
-  // allow current/known ids
   if (raw === 'scientific-advertising') return 'scientific-advertising';
   if (raw === 'optimal-poker') return 'optimal-poker';
   return raw;
+}
+
+// NEW: Map normalized UI id -> id expected by /api/ask/stream (legacy for SA)
+function apiPackId(id: string): string {
+  return id === 'scientific-advertising' ? 'hopkins-scientific-advertising' : id;
 }
 
 function toNumber(v: unknown): number | null {
@@ -67,7 +71,6 @@ function normalizeAsk(raw: unknown): AskResult {
 const LS_KEY_LAST_Q = 'b2ai:lastQ';
 const LS_KEY_PACK = 'b2ai:pack';
 
-// Friendly label for subtitle/placeholder
 function packLabel(id: string | null | undefined): string {
   if (!id) return 'Selected Pack';
   if (id === 'scientific-advertising') return 'Scientific Advertising';
@@ -91,12 +94,10 @@ export default function HomePage() {
   const autoRanRef = useRef(false);
   const esRef = useRef<EventSource | null>(null);
 
-  /* Focus input */
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
-  /* Restore q + normalize/seed pack from URL/LS once on mount */
   useEffect(() => {
     try {
       const u = new URL(window.location.href);
@@ -104,11 +105,9 @@ export default function HomePage() {
       const urlPackRaw = u.searchParams.get('pack');
       const savedPack = localStorage.getItem(LS_KEY_PACK);
 
-      // Normalize initial pack
       const initPack = normalizePackId(urlPackRaw ?? savedPack ?? 'scientific-advertising');
       setPack(initPack);
 
-      // Ensure URL always has normalized ?pack=
       if (initPack !== (urlPackRaw ?? '')) {
         u.searchParams.set('pack', initPack);
         window.history.replaceState(null, '', u.toString());
@@ -117,7 +116,6 @@ export default function HomePage() {
         window.history.replaceState(null, '', u.toString());
       }
 
-      // Seed q from URL if present
       if (urlQ && !q) setQ(urlQ);
     } catch {
       /* no-op */
@@ -125,7 +123,6 @@ export default function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* Persist pack + mirror to URL whenever it changes */
   useEffect(() => {
     if (!pack) return;
     try {
@@ -138,20 +135,16 @@ export default function HomePage() {
     }
   }, [pack]);
 
-  /** Cancel streaming (Stop button / Esc) */
   const cancelStream = useCallback(() => {
     if (esRef.current) {
       try {
         esRef.current.close();
-      } catch {
-        /* no-op */
-      }
+      } catch {}
       esRef.current = null;
     }
     setLoading(false);
   }, []);
 
-  /* Bind Esc to cancel while streaming */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && esRef.current) {
@@ -163,46 +156,33 @@ export default function HomePage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [cancelStream]);
 
-  /** ---- CLEAR (Item 1) ---- */
   const clearAll = useCallback(() => {
-    // stop stream if active
     cancelStream();
-    // clear UI state
     setQ('');
     setError(null);
     setResult(null);
     setCopiedAnswer(null);
     setCopiedLink(null);
-    // remove q & run from URL; keep pack
     try {
       const u = new URL(window.location.href);
       u.searchParams.delete('q');
       u.searchParams.delete('run');
       if (pack) u.searchParams.set('pack', pack);
       window.history.replaceState(null, '', u.toString());
-    } catch {
-      /* no-op */
-    }
-    // clear saved last query to prevent autorun
+    } catch {}
     try {
       localStorage.removeItem(LS_KEY_LAST_Q);
-    } catch {
-      /* no-op */
-    }
+    } catch {}
   }, [cancelStream, pack]);
 
-  /** ---- Streaming ask via EventSource (SSE GET) ---- */
   const ask = useCallback(
     async (query: string, opts?: { preserveRun?: boolean }) => {
       if (!query.trim()) return;
 
-      // close any prior stream
       if (esRef.current) {
         try {
           esRef.current.close();
-        } catch {
-          /* no-op */
-        }
+        } catch {}
         esRef.current = null;
       }
 
@@ -210,26 +190,21 @@ export default function HomePage() {
       setError(null);
       setResult({ answer: '', sources: [] });
 
-      // shareable URL early
       try {
         const u = new URL(window.location.href);
         u.searchParams.set('q', query);
         if (pack) u.searchParams.set('pack', pack);
         if (!opts?.preserveRun) u.searchParams.delete('run');
         window.history.replaceState(null, '', u.toString());
-      } catch {
-        /* no-op */
-      }
+      } catch {}
       try {
         localStorage.setItem(LS_KEY_LAST_Q, query);
-      } catch {
-        /* no-op */
-      }
+      } catch {}
 
-      // Open SSE connection
       try {
+        // *** Only change here: use apiPackId(pack) for the stream endpoint ***
         const url = `/api/ask/stream?q=${encodeURIComponent(query)}${
-          pack ? `&pack=${encodeURIComponent(pack)}` : ''
+          pack ? `&pack=${encodeURIComponent(apiPackId(pack))}` : ''
         }`;
         const es = new EventSource(url);
         esRef.current = es;
@@ -260,9 +235,7 @@ export default function HomePage() {
             void showLoggedToast();
             try {
               es.close();
-            } catch {
-              /* no-op */
-            }
+            } catch {}
             esRef.current = null;
             setLoading(false);
           } else if (type === 'error') {
@@ -274,9 +247,7 @@ export default function HomePage() {
         es.onerror = () => {
           try {
             es.close();
-          } catch {
-            /* no-op */
-          }
+          } catch {}
           esRef.current = null;
           setLoading(false);
           setError((prev) => prev || 'Stream error');
@@ -290,7 +261,6 @@ export default function HomePage() {
     [pack, result?.answer]
   );
 
-  /** Autorun (unchanged behavior) */
   useEffect(() => {
     try {
       const u = new URL(window.location.href);
@@ -304,20 +274,15 @@ export default function HomePage() {
           void ask(urlQ, { preserveRun: true });
         }
       }
-    } catch {
-      /* no-op */
-    }
+    } catch {}
   }, [ask]);
 
-  /** Handlers */
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const next = e.target.value;
     setQ(next);
     try {
       localStorage.setItem(LS_KEY_LAST_Q, next);
-    } catch {
-      /* no-op */
-    }
+    } catch {}
   }
   function getShareUrl(forQ: string): string {
     const current = new URL(window.location.href);
@@ -331,7 +296,6 @@ export default function HomePage() {
     await ask(q, { preserveRun: false });
   }
 
-  /** Logged toast */
   async function showLoggedToast() {
     try {
       const r = await fetch('/api/insights', { cache: 'no-store' });
@@ -356,7 +320,6 @@ export default function HomePage() {
     }
   }
 
-  /** Clipboard text */
   const clipboardText = useMemo(() => {
     if (!result) return '';
     const lines: string[] = [];
@@ -404,23 +367,19 @@ export default function HomePage() {
       <div className="mb-2 flex items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold">Ask the Pack</h1>
         <div className="flex items-center gap-2">
-          {/* Pack selector */}
           <PackPicker
             value={pack}
             onChange={(p: string) => {
               setPack(p);
-              // Item 1: clear query/state & URL q/run on pack change, keep pack, prevent autorun
+              // clear query/state & URL q/run on pack change, keep pack, prevent autorun
               clearAll();
-              // ensure URL reflects only the new pack
               try {
                 const u = new URL(window.location.href);
                 u.searchParams.set('pack', p);
                 u.searchParams.delete('q');
                 u.searchParams.delete('run');
                 window.history.replaceState(null, '', u.toString());
-              } catch {
-                /* no-op */
-              }
+              } catch {}
             }}
           />
           <IntegrityBadge />
@@ -453,7 +412,6 @@ export default function HomePage() {
             Stop
           </button>
         )}
-        {/* Item 1: Clear button — appears when there is text in the query field */}
         {q.trim().length > 0 && (
           <button
             type="button"
@@ -533,7 +491,6 @@ export default function HomePage() {
         </section>
       )}
 
-      {/* Toast */}
       <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex justify-center px-4">
         {toast && (
           <div className="pointer-events-auto max-w-md rounded-xl border border-zinc-300 bg-white/95 px-4 py-3 text-sm shadow-lg backdrop-blur dark:border-zinc-700 dark:bg-zinc-900/90">
