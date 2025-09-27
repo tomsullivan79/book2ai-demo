@@ -80,10 +80,8 @@ export default async function SourcePage({
   const raw = await loadSourceText(searchParams?.pack); // pass pack through
   const pages = splitPages(raw);
 
-  const packLabel =
-    normalizePackId(searchParams?.pack) === "optimal-poker"
-      ? "Optimal Poker"
-      : "Scientific Advertising";
+  // Fallback: if file has no [[PAGE:n]] markers (e.g., Optimal Poker), show whole text as Page 1
+  const viewPages = pages.length > 0 ? pages : [{ n: 1, text: raw.trim() }];
 
   const targetParam = (searchParams?.p ?? "").trim();
 
@@ -95,7 +93,12 @@ export default async function SourcePage({
   return (
     <main className="p-4 max-w-5xl mx-auto">
       <h1 className="text-xl font-semibold mb-3">{packLabel} — Source</h1>
-      <p className="text-sm mb-4">Jump to a page by number (uses [[PAGE:n]] markers).</p>
+      <p className="text-sm mb-4">
+        {viewPages.length > 1
+          ? "Jump to a page by number (uses [[PAGE:n]] markers)."
+          : "This source doesn’t include page markers; showing full text as Page 1."}
+      </p>
+
 
       <form action="/source" method="get" className="flex items-center gap-2 mb-4">
         <input type="hidden" name="pack" value={normalizePackId(searchParams?.pack)} />
@@ -135,7 +138,7 @@ export default async function SourcePage({
       ) : null}
 
       <div className="space-y-4">
-        {pages.map((pg) => (
+        {viewPages.map((pg) => (
           <section key={pg.n} id={`p-${pg.n}`} className="border rounded p-3">
             <div className="text-xs text-gray-600 mb-1">Page {pg.n}</div>
             <pre className="whitespace-pre-wrap text-sm">{pg.text}</pre>
