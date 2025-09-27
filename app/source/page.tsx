@@ -85,6 +85,11 @@ export default async function SourcePage({
 
   const targetParam = (searchParams?.p ?? "").trim();
 
+  const packLabel =
+    normalizePackId(searchParams?.pack) === "optimal-poker"
+      ? "Optimal Poker"
+      : "Scientific Advertising";
+
 
   const targetPage = Number(targetParam);
   const validTarget = Number.isFinite(targetPage) && targetPage > 0;
